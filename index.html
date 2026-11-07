@@ -362,6 +362,7 @@ function buildModel(movs,mkt,method,nowT){
       const a=toARS(m),u=toUSD(m);
       if(m.amt>=0){p.gIncA+=a;p.gIncU+=u}else{p.taxA+=a;p.taxU+=u}
       p.flows.push({t:m.t,a,u});
+      if(m.cur==='USD'||hasFx)(p.pays||(p.pays=[])).push({t:m.t,u,q:m.amt>=0?p.qty:0});
       events.push({t:m.t,tk:m.tk,dq:0,cA:a,cU:u});
     }
   }
@@ -477,9 +478,43 @@ function buildModel(movs,mkt,method,nowT){
   for(const w of withdrawals){const r=mrow(mk(w.t));r.wd+=w.ars;r.wdU+=w.usd}
   for(const t of trades){const r=mrow(mk(t.t));if(t.side==='COMPRA'){r.buy+=t.amtA;r.buyU+=t.amtU}else if(t.side==='VENTA'){r.sell+=t.amtA;r.sellU+=t.amtU}}
   for(const e of events)if(e.dq===0){const r=mrow(mk(e.t));r.inc+=e.cA;r.incU+=e.cU}
-  return {splits,fxAt,fxNow,hasFx,nowT,firstT,P,list,sales,trades,deposits,withdrawals,warns,unclassified,caucionARS,cashARS,cashUSD,
+  return {lastMovT:sorted.length?sorted[sorted.length-1].t:nowT,splits,fxAt,fxNow,hasFx,nowT,firstT,P,list,sales,trades,deposits,withdrawals,warns,unclassified,caucionARS,cashARS,cashUSD,
     tot:{mvA,mvU,costA,costU,realA,realU,incA,incU,unrA,unrU,depA,depU,wdA,wdU,acctA,acctU,totA,totU,secA,secU,irrA,irrU,staleCount},
     timeline,periods,monthly:Object.values(monthly).sort((a,b)=>a.k<b.k?-1:1),priceAt};
+}
+/* proyección de cobros: dividendos, rentas y amortizaciones de los próximos 12 meses */
+function addMonths(t,n){const d=new Date(t*DAY),y=d.getUTCFullYear(),mo=d.getUTCMonth()+n,day=d.getUTCDate();const dim=new Date(Date.UTC(y,mo+1,0)).getUTCDate();return Math.round(Date.UTC(y,mo,Math.min(day,dim))/DAY)}
+function project(M,bonds,assumeOne){
+  const cutoff=M.lastMovT,end=addMonths(M.nowT,12),ev=[],skipped=[],info={};
+  for(const p of M.list){
+    if(!(p.qty>0)||!p.pays||!p.pays.length)continue;
+    const g={};for(const x of p.pays){const o=g[x.t]||(g[x.t]={t:x.t,u:0,q:0});o.u+=x.u;if(x.q)o.q=x.q}
+    const pays=Object.values(g).filter(x=>x.q>0&&x.u>0).sort((a,b)=>a.t-b.t);
+    if(!pays.length)continue;
+    const isON=p.tipo==='Corporativos'||p.tipo==='Letras';
+    let step;const bf=isON&&bonds[p.tk]&&+bonds[p.tk].freq;
+    if(bf){step=bf}
+    else if(pays.length>=2){const gaps=[];for(let i=1;i<pays.length;i++)gaps.push(pays[i].t-pays[i-1].t);gaps.sort((a,b)=>a-b);const med=gaps[Math.floor(gaps.length/2)];step=med<45?1:med<135?3:med<270?6:12}
+    else if(assumeOne){step=3}else{skipped.push(p.tk);continue}
+    const last=pays[pays.length-1],per=last.u/last.q;
+    const b=isON?bonds[p.tk]:null,venc=b&&b.venc?parseDate(b.venc):null;
+    const am=(b&&b.amort||[]).map(([d,pc])=>({t:parseDate(d),f:pc/100})).filter(x=>x.t!=null).sort((a,c)=>a.t-c.t);
+    const rem=t=>1-am.filter(x=>x.t<=t).reduce((s,x)=>s+x.f,0);
+    info[p.tk]={step,n:pays.length,per,isON,venc,last:last.t};
+    for(let k=1;;k++){
+      const t=addMonths(last.t,step*k);if(t>end)break;
+      if(venc&&t>venc)break;
+      if(t<=cutoff)continue;
+      const f=isON?Math.max(0,rem(t)/Math.max(rem(last.t),1e-9)):1;
+      if(f>0)ev.push({t,tk:p.tk,kind:isON?'Renta':'Dividendo',u:per*p.qty*f,n:pays.length,pending:t<=M.nowT});
+    }
+    if(isON){
+      const dates=am.map(x=>({t:x.t,f:x.f}));if(venc&&!am.some(x=>x.t===venc)&&rem(venc)>0)dates.push({t:venc,f:rem(venc)});
+      for(const a of dates){if(a.t>cutoff&&a.t<=end)ev.push({t:a.t,tk:p.tk,kind:'Amortización',u:p.qty*a.f,n:pays.length,pending:a.t<=M.nowT})}
+    }
+  }
+  ev.sort((a,b)=>a.t-b.t||a.tk.localeCompare(b.tk));
+  return {ev,skipped,info,end};
 }
 /* benchmarks: mismos flujos en otras alternativas */
 function benchmarks(M,mkt){
@@ -631,7 +666,7 @@ function donutSvg(items,centerBig,centerSmall){
 }
 
 /* ============ estado y datos de ejemplo ============ */
-const state={tab:'resumen',cur:'ARS',method:'avg',raw:{},mkt:{fx:[],spy:[],ipc:[],prices:{},hist:{},fxManual:0,sectors:{}},meta:null,demo:false,per:'month',sort:{k:'vA',d:-1},showClosed:false,open:null,fTk:'',fSide:'',loaded:false};
+const state={tab:'resumen',cur:'ARS',method:'avg',raw:{},mkt:{fx:[],spy:[],ipc:[],prices:{},hist:{},fxManual:0,sectors:{},bonds:{}},meta:null,demo:false,per:'month',sort:{k:'vA',d:-1},showClosed:false,assumeOne:false,open:null,fTk:'',fSide:'',loaded:false};
 try{const p=JSON.parse(localStorage.getItem(LS+'ui')||'{}');if(p.cur)state.cur=p.cur;if(p.tab)state.tab=p.tab;if(p.method)state.method=p.method}catch(e){}
 const saveUi=()=>{try{localStorage.setItem(LS+'ui',JSON.stringify({cur:state.cur,tab:state.tab,method:state.method}))}catch(e){}};
 function demoData(){
@@ -688,7 +723,7 @@ const ingest={
 
 /* ============ render ============ */
 let M=null,B=null,mktUse=null;
-const TABS=[['resumen','Resumen'],['posiciones','Posiciones'],['rendimiento','Rendimiento'],['operaciones','Operaciones'],['flujos','Flujos'],['benchmarks','Benchmarks'],['datos','Datos']];
+const TABS=[['resumen','Resumen'],['posiciones','Posiciones'],['rendimiento','Rendimiento'],['operaciones','Operaciones'],['flujos','Flujos'],['proyeccion','Proyección'],['benchmarks','Benchmarks'],['datos','Datos']];
 const isU=()=>state.cur==='USD';
 const V=(a,u)=>isU()?u:a;
 const mny=(v,o)=>money(v,state.cur,o);
@@ -706,7 +741,7 @@ async function loadAuto(){
 }
 function effMkt(){
   const m=state.mkt,a=state.auto||{};
-  return {fx:m.fx.length?m.fx:(a.fx||[]),spy:m.spy.length?m.spy:(a.spy||[]),ipc:m.ipc.length?m.ipc:(a.ipc||[]),prices:{...(a.prices||{}),...m.prices},hist:m.hist,fxManual:m.fxManual,sectors:m.sectors};
+  return {fx:m.fx.length?m.fx:(a.fx||[]),spy:m.spy.length?m.spy:(a.spy||[]),ipc:m.ipc.length?m.ipc:(a.ipc||[]),prices:{...(a.prices||{}),...m.prices},hist:m.hist,fxManual:m.fxManual,sectors:m.sectors,bonds:m.bonds};
 }
 function recompute(){
   const raws=state.demo?state.demoRows:rawList();
@@ -728,7 +763,7 @@ function render(){
   $('#meta').textContent=M?`${rawList().length||state.demoRows?.length||0} movimientos · hasta ${dlab(M.nowT)}${state.auto&&state.auto.updated?' · mercado al '+state.auto.updated.slice(0,10):''}`:'';
   if(!M){v.innerHTML=state.tab==='datos'?viewDatos():viewEmpty();}
   else{
-    const fn={resumen:viewResumen,posiciones:viewPos,rendimiento:viewRend,operaciones:viewOps,flujos:viewFlujos,benchmarks:viewBench,datos:viewDatos}[state.tab];
+    const fn={resumen:viewResumen,posiciones:viewPos,rendimiento:viewRend,operaciones:viewOps,flujos:viewFlujos,proyeccion:viewProy,benchmarks:viewBench,datos:viewDatos}[state.tab];
     v.innerHTML=(state.demo?`<div class="banner"><span><b>Datos de ejemplo.</b> Activos y montos inventados para mostrar cómo se ve el tablero.</span><button class="btn sm" data-act="exitdemo">Salir del ejemplo</button></div>`:'')+fn();
   }
   charts.forEach(f=>f());
@@ -877,6 +912,36 @@ function viewFlujos(){
   <div class="grid2"><section class="panel"><h2>Depósitos y retiros por mes</h2><p class="hint">Retiros hacia abajo</p><div class="chart" id="chFl"></div></section><section class="panel"><h2>Compras y ventas por mes</h2><p class="hint">Ventas hacia abajo</p><div class="chart" id="chCmp"></div></section></div>
   <div class="tw"><table><thead><tr><th>Mes</th><th>Depósitos</th><th>Retiros</th><th>Neto</th><th>Compras</th><th>Ventas</th><th>Dividendos y rentas</th></tr></thead><tbody>${mo.slice().reverse().map(r=>`<tr><td>${mlab(parseDate(r.k+'-01'))}</td><td class="num">${mny(V(r.dep,r.depU))}</td><td class="num">${mny(V(r.wd,r.wdU))}</td><td class="num ${cls(V(r.dep-r.wd,r.depU-r.wdU))}">${mny(V(r.dep-r.wd,r.depU-r.wdU),{sign:true})}</td><td class="num">${mny(V(r.buy,r.buyU))}</td><td class="num">${mny(V(r.sell,r.sellU))}</td><td class="num ${cls(V(r.inc,r.incU))}">${r.inc?mny(V(r.inc,r.incU),{sign:true}):'—'}</td></tr>`).join('')}</tbody></table></div>`;
 }
+function viewProy(){
+  const c=state.cur,bonds=state.mkt.bonds||{};
+  const R=project(M,bonds,state.assumeOne);
+  const cv=u=>isU()||!M.hasFx?u:u*M.fxNow;
+  const cc=isU()||!M.hasFx?'USD':'ARS';
+  const m0=parseDate(dstr(M.nowT).slice(0,7)),months=[];for(let i=0;i<12;i++)months.push(addMonths(m0,i));
+  const idx=t=>{const d=dstr(t).slice(0,7);const i=months.findIndex(m=>dstr(m).slice(0,7)===d);return i<0&&t<months[0]?0:i};
+  const ser={Dividendo:months.map(()=>0),Renta:months.map(()=>0),'Amortización':months.map(()=>0)};
+  for(const e of R.ev){const i=idx(e.t);if(i>=0)ser[e.kind][i]+=cv(e.u)}
+  charts.push(()=>{const el=$('#chProy');if(!el)return;barChart(el,{cats:months.map(t=>mlab(t)),series:[{name:'Dividendos y ETFs',color:'var(--s1)',vals:ser.Dividendo},{name:'Rentas de ONs',color:'var(--s3)',vals:ser.Renta},{name:'Amortizaciones',color:'var(--s4)',vals:ser['Amortización']}],yfmt:v=>money(v,cc,{compact:true}),tfmt:v=>money(v,cc),h:250,label:'Cobros proyectados por mes'})});
+  const tot=R.ev.reduce((s,e)=>s+e.u,0),totInc=R.ev.filter(e=>e.kind!=='Amortización').reduce((s,e)=>s+e.u,0);
+  const in30=R.ev.filter(e=>e.t<=M.nowT+30).reduce((s,e)=>s+e.u,0);
+  const next=R.ev.find(e=>e.t>M.nowT)||R.ev[0];
+  const mvU=M.tot.mvU>0?M.tot.mvU:1;
+  const onHeld=M.list.filter(p=>p.qty>0&&(p.tipo==='Corporativos'||p.tipo==='Letras'));
+  const kindBadge=k=>`<span class="badge" style="${k==='Dividendo'?'background:var(--accent-soft);color:var(--accent)':k==='Renta'?'background:var(--pos-soft);color:var(--pos)':'background:var(--warn-soft);color:var(--warn)'}">${k.toLowerCase()}</span>`;
+  const fr=n=>({1:'mensual',3:'trimestral',6:'semestral',12:'anual'}[n]||n+' m');
+  return `<div class="sec-h"><div><h2 style="font:700 20px var(--f-display);margin:0">Cobros proyectados</h2><p class="mut" style="margin:2px 0 0">Dividendos, rentas y amortizaciones de los próximos 12 meses</p></div></div>
+  <div class="banner"><span><b>Es una estimación.</b> Se arma con tus cobros anteriores: la frecuencia y el monto por unidad de cada activo, multiplicados por lo que tenés hoy. Si una empresa cambia el dividendo o vendés una posición, el valor real será distinto.</span></div>
+  <section class="cmp"><div><div class="lbl">Próximos 12 meses</div><div class="v">${money(cv(tot),cc,{compact:true})}</div><div class="mut" style="font-size:12.5px">${money(cv(totInc),cc,{compact:true})} sin amortizaciones</div></div><div><div class="lbl">Próximos 30 días</div><div class="v">${money(cv(in30),cc,{compact:true})}</div></div><div><div class="lbl">Próximo cobro</div><div class="v" style="font-size:16px">${next?esc(next.tk)+' · '+dlab(next.t):'—'}</div><div class="mut num" style="font-size:12.5px">${next?money(cv(next.u),cc):''}</div></div><div><div class="lbl">Rendimiento por cobros</div><div class="v">${pct(totInc/mvU)}</div><div class="mut" style="font-size:12.5px">sobre el valor actual</div></div></section>
+  <section class="panel"><h2>Por mes · ${cc}</h2><p class="hint">Incluye cobros que ya deberían haberse acreditado después de tu último movimiento cargado</p><div class="chart" id="chProy"></div>
+    <div class="legend"><span><i style="background:var(--s1)"></i>Dividendos y ETFs</span><span><i style="background:var(--s3)"></i>Rentas de ONs</span><span><i style="background:var(--s4)"></i>Amortizaciones</span></div></section>
+  ${onHeld.length?`<section class="panel"><h2>Obligaciones negociables</h2><p class="hint">Cargá el vencimiento para que la proyección corte ahí y sume el capital. Si una ON tiene un solo cobro previo, elegí su frecuencia. Si amortiza en cuotas, escribí fecha:porcentaje separadas por coma (por ejemplo 2027-06-22:50, 2027-12-22:50). Sin cuotas, se asume que paga todo al vencimiento.</p>
+    <div class="tw"><table><thead><tr><th>ON</th><th>Nominales</th><th>Cobro</th><th>Frecuencia</th><th>Vencimiento</th><th>Amortización en cuotas</th></tr></thead><tbody>${onHeld.map(p=>{const b=bonds[p.tk]||{},i=R.info[p.tk];return `<tr><td class="tk">${p.tk}</td><td class="num">${nfQ.format(p.qty)}</td><td>${i?`${fr(i.step)} · ${money(cv(i.per*p.qty),cc)}`:'<span class="mut">un solo cobro previo</span>'}</td><td><select class="in" data-bf="${p.tk}" aria-label="Frecuencia de ${p.tk}">${[['','Automática'],['1','Mensual'],['3','Trimestral'],['6','Semestral'],['12','Anual']].map(([v,l])=>`<option value="${v}"${String(b.freq||'')===v?' selected':''}>${l}</option>`).join('')}</select></td><td><input class="in" type="date" data-bv="${p.tk}" value="${esc(b.venc||'')}" aria-label="Vencimiento de ${p.tk}"></td><td><input class="in" style="width:260px" data-ba="${p.tk}" value="${esc((b.amort||[]).map(x=>x[0]+':'+x[1]).join(', '))}" placeholder="opcional" aria-label="Cuotas de ${p.tk}"></td></tr>`}).join('')}</tbody></table></div>
+    <div class="row2" style="margin-top:10px"><button class="btn sm primary" data-act="savebonds">Guardar</button></div></section>`:''}
+  <section><h2 style="font:600 15px var(--f-body);margin:0 0 8px">Detalle de próximos cobros</h2>
+  <div class="tw" style="max-height:520px"><table><thead><tr><th>Fecha</th><th>Activo</th><th>Concepto</th><th>Monto (${cc})</th><th>Base</th></tr></thead><tbody>${R.ev.slice(0,80).map(e=>`<tr><td>${dlab(e.t)}${e.pending?' <span class="badge" title="Posterior a tu último movimiento cargado">por confirmar</span>':''}</td><td class="tk">${e.tk}</td><td>${kindBadge(e.kind)}</td><td class="num">${money(cv(e.u),cc)}</td><td class="mut">${e.n} cobro${e.n>1?'s':''} previos</td></tr>`).join('')}</tbody></table></div>
+  ${R.skipped.length?`<p class="mut" style="font-size:12.5px;margin-top:10px">Sin proyección por tener un solo cobro: ${R.skipped.join(', ')}. <label class="row2" style="display:inline-flex"><input type="checkbox" data-act="assume" ${state.assumeOne?'checked':''}> Incluirlos suponiendo pago trimestral</label></p>`:''}
+  </section>`;
+}
 function viewBench(){
   const c=state.cur,T=M.tot;
   const items=[['cartera','Tu cartera','var(--s1)'],['spy','SPY (en USD)','var(--s2)'],['usd','Dólar CCL (guardado)','var(--s3)'],['ipc','Inflación (poder de compra)','var(--s4)']];
@@ -931,8 +996,8 @@ function viewDatos(){
 }
 
 /* ============ acciones ============ */
-async function persistMkt(){await store.save('mkt','mkt',{fx:state.mkt.fx,spy:state.mkt.spy,ipc:state.mkt.ipc,prices:state.mkt.prices,hist:state.mkt.hist,fxManual:state.mkt.fxManual,sectors:state.mkt.sectors||{}})}
-function mergeMkt(x){ if(!x)return; x=JSON.parse(JSON.stringify(x)); for(const k of ['fx','spy','ipc'])state.mkt[k]=x[k]||[]; state.mkt.prices=x.prices||{};state.mkt.hist=x.hist||{};state.mkt.fxManual=+x.fxManual||0;state.mkt.sectors=x.sectors||{} }
+async function persistMkt(){await store.save('mkt','mkt',{fx:state.mkt.fx,spy:state.mkt.spy,ipc:state.mkt.ipc,prices:state.mkt.prices,hist:state.mkt.hist,fxManual:state.mkt.fxManual,sectors:state.mkt.sectors||{},bonds:state.mkt.bonds||{}})}
+function mergeMkt(x){ if(!x)return; x=JSON.parse(JSON.stringify(x)); for(const k of ['fx','spy','ipc'])state.mkt[k]=x[k]||[]; state.mkt.prices=x.prices||{};state.mkt.hist=x.hist||{};state.mkt.fxManual=+x.fxManual||0;state.mkt.sectors=x.sectors||{};state.mkt.bonds=x.bonds||{} }
 async function importExcel(file){
   try{
     const buf=await file.arrayBuffer();
@@ -988,10 +1053,13 @@ document.addEventListener('click',async ev=>{
   else if(a==='fxman'){const n=num($('#fxManual').value);state.mkt.fxManual=n>0?n:0;await persistMkt();recompute();render();toast(n>0?'Dólar guardado':'Dólar manual quitado')}
   else if(a==='savepx'){let n=0;document.querySelectorAll('[data-px]').forEach(i=>{const p=num(i.value);if(p>0){state.mkt.prices[i.dataset.px]=p;n++}});if(n){await persistMkt();recompute();render();toast(n+' precios guardados')}else toast('No escribiste ningún precio')}
   else if(a==='savesec'){let n=0;state.mkt.sectors=state.mkt.sectors||{};document.querySelectorAll('[data-ss]').forEach(i=>{const v=i.value.trim();if(v){const tk=i.dataset.ss;state.mkt.sectors[tk]=[document.querySelector('[data-sc="'+tk+'"]').value,v];n++}});if(n){await persistMkt();recompute();render();toast(n+' activos clasificados')}else toast('Escribí al menos un sector')}
+  else if(a==='assume'){state.assumeOne=el.checked;render()}
+  else if(a==='savebonds'){state.mkt.bonds=state.mkt.bonds||{};document.querySelectorAll('[data-bv]').forEach(i=>{const tk=i.dataset.bv,txt=document.querySelector('[data-ba="'+tk+'"]').value,fq=+document.querySelector('[data-bf="'+tk+'"]').value||0;const am=txt.split(',').map(x=>x.trim()).filter(Boolean).map(x=>{const [d,pc]=x.split(':');return [d.trim(),num(pc)]}).filter(x=>parseDate(x[0])!=null&&x[1]>0);
+      if(i.value||am.length||fq)state.mkt.bonds[tk]={venc:i.value||'',amort:am,freq:fq};else delete state.mkt.bonds[tk]});await persistMkt();render();toast('ONs guardadas')}
   else if(a==='backup'){await download('cartera-respaldo.json',JSON.stringify({movs:rawList(),mkt:state.mkt}),'application/json')}
   else if(a==='wipe'){
     if(el.dataset.sure!=='1'){el.dataset.sure='1';el.textContent='Tocá de nuevo para confirmar';el.classList.add('primary');return}
-    await store.wipe([...Object.keys(state.raw),'mkt','meta']);state.raw={};state.mkt={fx:[],spy:[],ipc:[],prices:{},hist:{},fxManual:0,sectors:{}};recompute();render();toast('Datos borrados');
+    await store.wipe([...Object.keys(state.raw),'mkt','meta']);state.raw={};state.mkt={fx:[],spy:[],ipc:[],prices:{},hist:{},fxManual:0,sectors:{},bonds:{}};recompute();render();toast('Datos borrados');
   }
 });
 document.addEventListener('change',ev=>{
