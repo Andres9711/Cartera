@@ -346,6 +346,7 @@ function buildModel(movs,mkt,method,nowT){
         }
         if(rem>1e-9)warns.push(`Venta de ${nfQ.format(q)} ${m.tk} el ${dstr(m.t)} supera lo comprado en este archivo (${nfQ.format(rem)} sin costo).`);
         p.qty-=q; p.sellA+=aA; p.sellU+=aU; p.realA+=aA-cA; p.realU+=aU-cU;
+        {const fS=fxAt(m.t);p.asRe=(p.asRe||0)+(aU-cU)*fS;p.fxRe=(p.fxRe||0)+cU*fS-cA}
         p.flows.push({t:m.t,a:aA,u:aU});
         sales.push({t:m.t,tk:m.tk,qty:q,price:m.price,procA:aA,procU:aU,costA:cA,costU:cU,rA:aA-cA,rU:aU-cU});
         trades.push({t:m.t,tk:m.tk,side:'VENTA',qty:q,price:m.price,amtA:aA,amtU:aU,rA:aA-cA,rU:aU-cU,costA:cA,costU:cU});
@@ -392,8 +393,10 @@ function buildModel(movs,mkt,method,nowT){
     const vA=qty*px, vU=vA/fxNow;
     p.qty=qty;p.px=px;p.hasCur=hasCur;p.scaled=!!scaled[tk];p.cA=cA;p.cU=cU;p.vA=vA;p.vU=vU;
     p.unA=qty>0?vA-cA:0;p.unU=qty>0?vU-cU:0;
+    p.asUn=qty>0?vA-cU*fxNow:0;p.fxUn=qty>0?cU*fxNow-cA:0;
     p.incNA=p.gIncA+p.taxA;p.incNU=p.gIncU+p.taxU;
     p.totA=p.realA+p.unA+p.incNA;p.totU=p.realU+p.unU+p.incNU;
+    p.asTot=(p.asRe||0)+p.asUn+p.incNA;p.fxTot=(p.fxRe||0)+p.fxUn;
     p.avgA=qty>0?cA/qty:0;p.avgU=qty>0?cU/qty:0;
     // TIR por activo
     const spanDays=p.flows.length?nowT-Math.min(...p.flows.map(f=>f.t)):0;
@@ -780,6 +783,20 @@ function warnBanners(){
   if(M.warns.length)h+=`<div class="banner warn"><span><b>Revisar:</b> ${esc(M.warns[0])}${M.warns.length>1?` (+${M.warns.length-1} más)`:''} El archivo puede no incluir compras anteriores.</span></div>`;
   return h;
 }
+function fxPanel(){
+  if(!M.hasFx)return '';
+  const L=M.list.filter(p=>Math.abs(p.asTot)+Math.abs(p.fxTot)>0.5);
+  const as=L.reduce((s,p)=>s+p.asTot,0),fx=L.reduce((s,p)=>s+p.fxTot,0),tot=as+fx;
+  const top=L.slice().sort((a,b)=>Math.abs(b.asTot+b.fxTot)-Math.abs(a.asTot+a.fxTot)).slice(0,14);
+  charts.push(()=>{const el=$('#chFx');if(!el)return;barChart(el,{cats:top.map(p=>p.tk),series:[{name:'Por el activo (en dólares)',color:'var(--s1)',vals:top.map(p=>p.asTot)},{name:'Por el tipo de cambio',color:'var(--s2)',vals:top.map(p=>p.fxTot)}],yfmt:v=>money(v,'ARS',{compact:true}),tfmt:v=>money(v,'ARS',{sign:true}),h:250,yfmtW:64,label:'Resultado en pesos por activo, separado en activo y tipo de cambio'})});
+  const rows=L.slice().sort((a,b)=>(b.asTot+b.fxTot)-(a.asTot+a.fxTot));
+  return `<section class="panel"><h2>Efecto del tipo de cambio</h2><p class="hint">Resultado en pesos de tus inversiones (realizado, no realizado y rentas), separado entre lo que hizo el activo en dólares y lo que sumó o restó el movimiento del dólar. Siempre en pesos.</p>
+    <section class="cmp" style="margin-bottom:14px"><div><div class="lbl">Resultado en pesos</div><div class="v ${cls(tot)}">${money(tot,'ARS',{sign:true,compact:true})}</div></div><div><div class="lbl"><i style="background:var(--s1)"></i>Por el activo</div><div class="v ${cls(as)}">${money(as,'ARS',{sign:true,compact:true})}</div><div class="mut num" style="font-size:12.5px">${tot?pct(as/tot):''} del total</div></div><div><div class="lbl"><i style="background:var(--s2)"></i>Por el tipo de cambio</div><div class="v ${cls(fx)}">${money(fx,'ARS',{sign:true,compact:true})}</div><div class="mut num" style="font-size:12.5px">${tot?pct(fx/tot):''} del total</div></div></section>
+    <div class="chart" id="chFx"></div>
+    <div class="legend"><span><i style="background:var(--s1)"></i>Por el activo (en dólares)</span><span><i style="background:var(--s2)"></i>Por el tipo de cambio</span></div>
+    <details style="margin-top:12px"><summary>Ver todos los activos</summary><div class="tw" style="margin-top:8px;max-height:420px"><table><thead><tr><th>Activo</th><th>Resultado $</th><th>Por el activo</th><th>Por el dólar</th></tr></thead><tbody>${rows.map(p=>`<tr><td class="tk">${p.tk}</td><td class="num ${cls(p.asTot+p.fxTot)}">${money(p.asTot+p.fxTot,'ARS',{sign:true})}</td><td class="num ${cls(p.asTot)}">${money(p.asTot,'ARS',{sign:true})}</td><td class="num ${cls(p.fxTot)}">${money(p.fxTot,'ARS',{sign:true})}</td></tr>`).join('')}</tbody></table></div></details>
+    <p class="mut" style="font-size:12.5px;margin:10px 0 0">Cómo se calcula: el efecto del dólar es lo que ganó el costo de cada compra, medido en dólares, entre la fecha de compra y la de hoy (o la de venta). Lo que queda es el resultado del activo en dólares, convertido al dólar de cierre. Las rentas y dividendos cuentan como resultado del activo. Un activo puede dar ganancia en pesos y pérdida en dólares, y ahí se nota.</p></section>`;
+}
 function viewResumen(){
   const T=M.tot,c=state.cur;
   const total=V(T.totA,T.totU),contrib=V(T.depA-T.wdA,T.depU-T.wdU),acct=V(T.acctA,T.acctU);
@@ -809,6 +826,7 @@ function viewResumen(){
   held.forEach(p=>{const k=classify(p);cl[k.clase]=(cl[k.clase]||0)+p.vA;clV[k.clase]=(clV[k.clase]||0)+V(p.vA,p.vU);const sn=k.clase==='ETFs'?'ETF · '+k.sector:k.sector;sc[sn]=(sc[sn]||0)+p.vA});
   const clRows=Object.entries(cl).sort((a,b)=>b[1]-a[1]).map(([n,v],i)=>({name:n,v,color:COL[i%8]}));
   const scRows=Object.entries(sc).sort((a,b)=>b[1]-a[1]);const scMax=Math.max(.0001,...scRows.map(r=>r[1]/tv));
+  const fxp=fxPanel();
   return warnBanners()+`
   <section class="hero">
     <div><div class="lbl">Valor de la cuenta</div><div class="big num">${mny(acct)}</div>
@@ -841,7 +859,8 @@ function viewResumen(){
       ${gl.length?`<div class="grid2" style="gap:16px"><div><div class="lbl mut" style="font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Mejores (no realizado)</div>${win.map(x=>`<div class="row2" style="justify-content:space-between"><span>${x.tk}</span><span class="num pos">${pct(x.r,{sign:true})}</span></div>`).join('')}</div>
       <div><div class="lbl mut" style="font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Peores</div>${lose.length?lose.map(x=>`<div class="row2" style="justify-content:space-between"><span>${x.tk}</span><span class="num neg">${pct(x.r,{sign:true})}</span></div>`).join(''):'<span class="mut">Ninguna en rojo</span>'}</div></div>`:''}
     </section>
-  </div>`;
+  </div>
+  ${fxp}`;
 }
 const sortFns={tk:p=>p.tk,tipo:p=>p.tipo||'',qty:p=>p.qty,avg:p=>V(p.avgA,p.avgU),px:p=>p.px,cost:p=>V(p.cA,p.cU),vA:p=>p.vA,un:p=>V(p.unA,p.unU),unp:p=>p.cA>0?p.unA/p.cA:-9,real:p=>V(p.realA,p.realU),inc:p=>V(p.incNA,p.incNU),tot:p=>V(p.totA,p.totU),irr:p=>V(p.irrA,p.irrU)??-99};
 function viewPos(){
