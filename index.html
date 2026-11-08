@@ -487,7 +487,7 @@ function buildModel(movs,mkt,method,nowT){
 }
 /* proyección de cobros: dividendos, rentas y amortizaciones de los próximos 12 meses */
 function addMonths(t,n){const d=new Date(t*DAY),y=d.getUTCFullYear(),mo=d.getUTCMonth()+n,day=d.getUTCDate();const dim=new Date(Date.UTC(y,mo+1,0)).getUTCDate();return Math.round(Date.UTC(y,mo,Math.min(day,dim))/DAY)}
-function project(M,bonds,assumeOne){
+function project(M,bonds,assumeOne,cal){
   const cutoff=M.lastMovT,end=addMonths(M.nowT,12),ev=[],skipped=[],info={};
   for(const p of M.list){
     if(!(p.qty>0)||!p.pays||!p.pays.length)continue;
@@ -504,13 +504,24 @@ function project(M,bonds,assumeOne){
     const am=(b&&b.amort||[]).map(([d,pc])=>({t:parseDate(d),f:pc/100})).filter(x=>x.t!=null).sort((a,c)=>a.t-c.t);
     const rem=t=>1-am.filter(x=>x.t<=t).reduce((s,x)=>s+x.f,0);
     info[p.tk]={step,n:pays.length,per,isON,venc,last:last.t};
+    const mine=[];
     for(let k=1;;k++){
       const t=addMonths(last.t,step*k);if(t>end)break;
       if(venc&&t>venc)break;
       if(t<=cutoff)continue;
       const f=isON?Math.max(0,rem(t)/Math.max(rem(last.t),1e-9)):1;
-      if(f>0)ev.push({t,tk:p.tk,kind:isON?'Renta':'Dividendo',u:per*p.qty*f,n:pays.length,pending:t<=M.nowT});
+      if(f>0)mine.push({t,tk:p.tk,kind:isON?'Renta':'Dividendo',u:per*p.qty*f,n:pays.length,pending:t<=M.nowT});
     }
+    // calendario real: reemplaza las fechas estimadas cercanas y ajusta el monto según el cambio anunciado
+    const cl=!isON&&cal&&cal[p.tk]||[];const ann=[];
+    for(let i=0;i<cl.length;i++){
+      const [ex,pay,a]=cl[i];const t=(pay?parseDate(pay):null)??(parseDate(ex)+21);
+      if(t==null||t<=cutoff||t>end)continue;
+      const pa=i>0?cl[i-1][2]:null;const f=pa>0?a/pa:1;
+      ann.push({t,tk:p.tk,kind:'Dividendo',u:per*p.qty*f,n:pays.length,pending:t<=M.nowT,ann:true});
+    }
+    for(const e of mine)if(!ann.some(a=>Math.abs(a.t-e.t)<=25))ev.push(e);
+    ev.push(...ann);
     if(isON){
       const dates=am.map(x=>({t:x.t,f:x.f}));if(venc&&!am.some(x=>x.t===venc)&&rem(venc)>0)dates.push({t:venc,f:rem(venc)});
       for(const a of dates){if(a.t>cutoff&&a.t<=end)ev.push({t:a.t,tk:p.tk,kind:'Amortización',u:p.qty*a.f,n:pays.length,pending:a.t<=M.nowT})}
@@ -739,7 +750,7 @@ async function loadAuto(){
     const toT=a=>(a||[]).map(([d,v])=>({t:parseDate(d),v:+v})).filter(x=>x.t!=null&&isFinite(x.v)).sort((a,b)=>a.t-b.t);
     let ipc=toT(j.ipc).map(x=>({t:parseDate(dstr(x.t).slice(0,7)),v:x.v}));
     if(ipc.length&&ipc.every(x=>Math.abs(x.v)<.5))ipc=ipc.map(x=>({t:x.t,v:x.v*100}));
-    state.auto={fx:toT(j.fx),spy:toT(j.spy),ipc,prices:j.prices||{},updated:j.updated||'',status:j.status||{}};
+    state.auto={fx:toT(j.fx),spy:toT(j.spy),ipc,prices:j.prices||{},dividends:j.dividends||{},updated:j.updated||'',status:j.status||{}};
   }catch(e){}
 }
 function effMkt(){
@@ -933,7 +944,7 @@ function viewFlujos(){
 }
 function viewProy(){
   const c=state.cur,bonds=state.mkt.bonds||{};
-  const R=project(M,bonds,state.assumeOne);
+  const R=project(M,bonds,state.assumeOne,(state.auto||{}).dividends);
   const cv=u=>isU()||!M.hasFx?u:u*M.fxNow;
   const cc=isU()||!M.hasFx?'USD':'ARS';
   const m0=parseDate(dstr(M.nowT).slice(0,7)),months=[];for(let i=0;i<12;i++)months.push(addMonths(m0,i));
@@ -949,7 +960,7 @@ function viewProy(){
   const kindBadge=k=>`<span class="badge" style="${k==='Dividendo'?'background:var(--accent-soft);color:var(--accent)':k==='Renta'?'background:var(--pos-soft);color:var(--pos)':'background:var(--warn-soft);color:var(--warn)'}">${k.toLowerCase()}</span>`;
   const fr=n=>({1:'mensual',3:'trimestral',6:'semestral',12:'anual'}[n]||n+' m');
   return `<div class="sec-h"><div><h2 style="font:700 20px var(--f-display);margin:0">Cobros proyectados</h2><p class="mut" style="margin:2px 0 0">Dividendos, rentas y amortizaciones de los próximos 12 meses</p></div></div>
-  <div class="banner"><span><b>Es una estimación.</b> Se arma con tus cobros anteriores: la frecuencia y el monto por unidad de cada activo, multiplicados por lo que tenés hoy. Si una empresa cambia el dividendo o vendés una posición, el valor real será distinto.</span></div>
+  <div class="banner"><span><b>Es una estimación.</b> ${Object.keys((state.auto||{}).dividends||{}).length?'Las fechas de dividendos <i>anunciadas</i> vienen del calendario de Nasdaq. El resto se arma con tus cobros anteriores:':'Se arma con tus cobros anteriores:'} la frecuencia y el monto por unidad de cada activo, multiplicados por lo que tenés hoy. Si una empresa cambia el dividendo o vendés una posición, el valor real será distinto.</span></div>
   <section class="cmp"><div><div class="lbl">Próximos 12 meses</div><div class="v">${money(cv(tot),cc,{compact:true})}</div><div class="mut" style="font-size:12.5px">${money(cv(totInc),cc,{compact:true})} sin amortizaciones</div></div><div><div class="lbl">Próximos 30 días</div><div class="v">${money(cv(in30),cc,{compact:true})}</div></div><div><div class="lbl">Próximo cobro</div><div class="v" style="font-size:16px">${next?esc(next.tk)+' · '+dlab(next.t):'—'}</div><div class="mut num" style="font-size:12.5px">${next?money(cv(next.u),cc):''}</div></div><div><div class="lbl">Rendimiento por cobros</div><div class="v">${pct(totInc/mvU)}</div><div class="mut" style="font-size:12.5px">sobre el valor actual</div></div></section>
   <section class="panel"><h2>Por mes · ${cc}</h2><p class="hint">Incluye cobros que ya deberían haberse acreditado después de tu último movimiento cargado</p><div class="chart" id="chProy"></div>
     <div class="legend"><span><i style="background:var(--s1)"></i>Dividendos y ETFs</span><span><i style="background:var(--s3)"></i>Rentas de ONs</span><span><i style="background:var(--s4)"></i>Amortizaciones</span></div></section>
@@ -957,7 +968,7 @@ function viewProy(){
     <div class="tw"><table><thead><tr><th>ON</th><th>Nominales</th><th>Cobro</th><th>Frecuencia</th><th>Vencimiento</th><th>Amortización en cuotas</th></tr></thead><tbody>${onHeld.map(p=>{const b=bonds[p.tk]||{},i=R.info[p.tk];return `<tr><td class="tk">${p.tk}</td><td class="num">${nfQ.format(p.qty)}</td><td>${i?`${fr(i.step)} · ${money(cv(i.per*p.qty),cc)}`:'<span class="mut">un solo cobro previo</span>'}</td><td><select class="in" data-bf="${p.tk}" aria-label="Frecuencia de ${p.tk}">${[['','Automática'],['1','Mensual'],['3','Trimestral'],['6','Semestral'],['12','Anual']].map(([v,l])=>`<option value="${v}"${String(b.freq||'')===v?' selected':''}>${l}</option>`).join('')}</select></td><td><input class="in" type="date" data-bv="${p.tk}" value="${esc(b.venc||'')}" aria-label="Vencimiento de ${p.tk}"></td><td><input class="in" style="width:260px" data-ba="${p.tk}" value="${esc((b.amort||[]).map(x=>x[0]+':'+x[1]).join(', '))}" placeholder="opcional" aria-label="Cuotas de ${p.tk}"></td></tr>`}).join('')}</tbody></table></div>
     <div class="row2" style="margin-top:10px"><button class="btn sm primary" data-act="savebonds">Guardar</button></div></section>`:''}
   <section><h2 style="font:600 15px var(--f-body);margin:0 0 8px">Detalle de próximos cobros</h2>
-  <div class="tw" style="max-height:520px"><table><thead><tr><th>Fecha</th><th>Activo</th><th>Concepto</th><th>Monto (${cc})</th><th>Base</th></tr></thead><tbody>${R.ev.slice(0,80).map(e=>`<tr><td>${dlab(e.t)}${e.pending?' <span class="badge" title="Posterior a tu último movimiento cargado">por confirmar</span>':''}</td><td class="tk">${e.tk}</td><td>${kindBadge(e.kind)}</td><td class="num">${money(cv(e.u),cc)}</td><td class="mut">${e.n} cobro${e.n>1?'s':''} previos</td></tr>`).join('')}</tbody></table></div>
+  <div class="tw" style="max-height:520px"><table><thead><tr><th>Fecha</th><th>Activo</th><th>Concepto</th><th>Monto (${cc})</th><th>Base</th></tr></thead><tbody>${R.ev.slice(0,80).map(e=>`<tr><td>${dlab(e.t)}${e.pending?' <span class="badge" title="Posterior a tu último movimiento cargado">por confirmar</span>':''}</td><td class="tk">${e.tk}</td><td>${kindBadge(e.kind)}${e.kind==='Dividendo'?` <span class="badge">${e.ann?'anunciado':'estimado'}</span>`:''}</td><td class="num">${money(cv(e.u),cc)}</td><td class="mut">${e.n} cobro${e.n>1?'s':''} previos</td></tr>`).join('')}</tbody></table></div>
   ${R.skipped.length?`<p class="mut" style="font-size:12.5px;margin-top:10px">Sin proyección por tener un solo cobro: ${R.skipped.join(', ')}. <label class="row2" style="display:inline-flex"><input type="checkbox" data-act="assume" ${state.assumeOne?'checked':''}> Incluirlos suponiendo pago trimestral</label></p>`:''}
   </section>`;
 }

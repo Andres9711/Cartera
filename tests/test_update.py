@@ -21,12 +21,14 @@ def fake_get(url, tries=3):
     raise RuntimeError("sin red: " + url)
 
 um.get = fake_get
+um.fetch_dividends = lambda symbols: {"MSFT": [["2026-11-18", "2026-12-09", 0.91]]}
 um.OUT = os.path.join(os.environ["TMPDIR_T"], "market.json")
 code = um.main()
 d = json.load(open(um.OUT))
 assert d["fx"][-1] == ["2026-10-26", 1520.0], d["fx"][-1]
 assert d["prices"]["YFCLO"] == 162700.0 and d["prices"]["KO"] == 105.0
 assert d["spy"][0][0] == "2025-03-04" and abs(d["spy"][0][1] - 36000 / 1014) < 1e-3
+assert d["dividends"]["MSFT"][0][2] == 0.91 and d["status"]["dividends"] == "ok"
 assert d["status"]["fx"] == "ok" and d["status"]["spy"] == "ok"
 # arg_bonds, arg_notes y arg_stocks fallan en el mock: ok parcial y código 1 no corresponde porque hubo precios
 assert d["status"]["prices"].startswith("ok (parcial)"), d["status"]

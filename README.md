@@ -3,7 +3,7 @@
 Tablero de seguimiento de portfolio. Cargás el Excel de movimientos del broker y calcula posiciones, resultados realizados y no realizados, TIR, flujos y comparaciones contra SPY, dólar e inflación, en ARS y USD.
 
 - Tus movimientos **no salen de tu navegador**. El repositorio solo contiene datos públicos de mercado.
-- Los datos de mercado (dólar CCL, inflación, cotizaciones de CEDEARs, ONs y bonos, SPY) se bajan solos cada día hábil a las 19:30 (hora de Argentina) y se guardan en `data/market.json`.
+- Los datos de mercado (dólar CCL, inflación, cotizaciones de CEDEARs, ONs y bonos, SPY, calendario de dividendos) se bajan solos cada día hábil a las 19:30 (hora de Argentina) y se guardan en `data/market.json`.
 
 ## Cómo funciona
 
@@ -18,4 +18,5 @@ Tablero de seguimiento de portfolio. Cargás el Excel de movimientos del broker 
 ## Mantenimiento
 
 - Si un día falla una fuente, mirá la pestaña Actions, paso "Bajar datos de mercado". Normalmente es un cambio de formato en una API y se arregla en `scripts/update_market.py`.
+- El calendario de dividendos viene de Nasdaq (fuente no oficial). Si falla, el tablero sigue con la estimación por historial y no se marca error en GitHub; el estado queda en `data/market.json`, campo `status.dividends`.
 - Lo que cargues a mano en la pestaña Datos del tablero pisa lo automático.

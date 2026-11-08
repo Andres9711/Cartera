@@ -5,6 +5,8 @@ Fuentes (todas gratuitas y sin clave):
   - ArgentinaDatos: dólar CCL histórico e inflación mensual
   - dolarapi.com:   CCL de hoy (completa el último día)
   - data912.com:    cotizaciones de CEDEARs, ONs, bonos y acciones; histórico del CEDEAR SPY
+  - Nasdaq:         calendario de dividendos de acciones y ETFs de EE. UU. (no oficial; si falla,
+                    el tablero sigue con la estimación por historial)
 
 Si una fuente falla, se conserva el dato anterior y se anota el error en "status".
 El script termina con código 1 si alguna fuente falló, para que GitHub avise por mail.
@@ -22,6 +24,14 @@ URL_CCL_HOY = "https://dolarapi.com/v1/dolares/contadoconliqui"
 URL_LIVE = "https://data912.com/live/{}"
 PANELS = ["arg_cedears", "arg_corp", "arg_bonds", "arg_notes", "arg_stocks"]
 URL_SPY = "https://data912.com/historical/cedears/SPY"
+URL_NASDAQ = "https://api.nasdaq.com/api/calendar/dividends?date={}"
+NQ_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Origin": "https://www.nasdaq.com",
+    "Referer": "https://www.nasdaq.com/",
+}
+DIV_BACK, DIV_AHEAD = 110, 75   # días hacia atrás (para calibrar el monto) y hacia adelante
 
 
 def get(url, tries=3):
@@ -79,6 +89,46 @@ def fetch_ipc():
     return out
 
 
+def us_date(s):
+    """MM/DD/YYYY -> YYYY-MM-DD (o None)."""
+    try:
+        m, d, y = str(s).strip().split("/")
+        return f"{int(y):04d}-{int(m):02d}-{int(d):02d}"
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def fetch_dividends(symbols):
+    """Calendario de dividendos por fecha ex-dividendo, solo de los símbolos dados (CEDEARs)."""
+    today = dt.date.today()
+    out, ok, bad = {}, 0, 0
+    for off in range(-DIV_BACK, DIV_AHEAD + 1):
+        d = today + dt.timedelta(days=off)
+        if d.weekday() >= 5:
+            continue
+        try:
+            req = urllib.request.Request(URL_NASDAQ.format(d.isoformat()), headers=NQ_HEADERS)
+            with urllib.request.urlopen(req, timeout=30) as r:
+                j = json.loads(r.read().decode("utf-8-sig"))
+            rows = ((j.get("data") or {}).get("calendar") or {}).get("rows") or []
+            ok += 1
+        except Exception:  # noqa: BLE001
+            bad += 1
+            time.sleep(1)
+            continue
+        for r in rows:
+            r = {k.lower(): v for k, v in r.items()}
+            sym = "".join(ch for ch in str(r.get("symbol", "")).upper() if ch.isalnum())
+            amt = num(r.get("dividend_rate"))
+            ex = us_date(r.get("dividend_ex_date")) or d.isoformat()
+            if sym in symbols and amt > 0:
+                out.setdefault(sym, {})[ex] = [ex, us_date(r.get("payment_date")), round(amt, 6)]
+        time.sleep(0.25)
+    if ok == 0 or bad > ok:
+        raise RuntimeError(f"Nasdaq no respondió ({ok} ok, {bad} con error)")
+    return {k: [out[k][e] for e in sorted(out[k])] for k in out}
+
+
 def price_of(r):
     c = num(r.get("c"))
     if c > 0:
@@ -134,17 +184,17 @@ def main():
             prev = json.load(f)
     except Exception:  # noqa: BLE001
         prev = {}
-    data = {k: prev.get(k) for k in ("fx", "ipc", "prices", "spy")}
+    data = {k: prev.get(k) for k in ("fx", "ipc", "prices", "spy", "dividends")}
     status, failed = {}, False
 
-    def run(name, fn):
+    def run(name, fn, soft=False):
         nonlocal failed
         try:
             res = fn()
             status[name] = "ok"
             return res
         except Exception as e:  # noqa: BLE001
-            failed = True
+            failed = failed or not soft
             status[name] = f"error: {str(e)[:200]}"
             print(f"[{name}] {e}", file=sys.stderr)
             return None
@@ -164,6 +214,10 @@ def main():
         spy = run("spy", lambda: fetch_spy(data["fx"]))
         if spy:
             data["spy"] = spy
+    if data.get("prices"):
+        dv = run("dividends", lambda: fetch_dividends(set(data["prices"])), soft=True)
+        if dv is not None:
+            data["dividends"] = dv
     data["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     data["status"] = status
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
