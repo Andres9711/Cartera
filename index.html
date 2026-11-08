@@ -747,7 +747,7 @@ const ingest={
 
 /* ============ render ============ */
 let M=null,B=null,mktUse=null;
-const TABS=[['resumen','Resumen'],['posiciones','Posiciones'],['rendimiento','Rendimiento'],['operaciones','Operaciones'],['flujos','Flujos'],['proyeccion','Proyección'],['impuestos','Impuestos'],['tecnicos','Técnicos'],['notas','Notas'],['benchmarks','Benchmarks'],['datos','Datos']];
+const TABS=[['resumen','Resumen'],['posiciones','Posiciones'],['rendimiento','Rendimiento'],['operaciones','Operaciones'],['flujos','Flujos'],['proyeccion','Proyección'],['ons','ONs'],['impuestos','Impuestos'],['tecnicos','Técnicos'],['notas','Notas'],['benchmarks','Benchmarks'],['datos','Datos']];
 const isU=()=>state.cur==='USD';
 const V=(a,u)=>isU()?u:a;
 const mny=(v,o)=>money(v,state.cur,o);
@@ -787,7 +787,7 @@ function render(){
   $('#meta').textContent=M?`${rawList().length||state.demoRows?.length||0} movimientos · hasta ${dlab(M.nowT)}${state.auto&&state.auto.updated?' · mercado al '+state.auto.updated.slice(0,10):''}`:'';
   if(!M){v.innerHTML=state.tab==='datos'?viewDatos():viewEmpty();}
   else{
-    const fn={resumen:viewResumen,posiciones:viewPos,rendimiento:viewRend,operaciones:viewOps,flujos:viewFlujos,proyeccion:viewProy,impuestos:viewImp,notas:viewNotas,tecnicos:viewTec,benchmarks:viewBench,datos:viewDatos}[state.tab];
+    const fn={resumen:viewResumen,posiciones:viewPos,rendimiento:viewRend,operaciones:viewOps,flujos:viewFlujos,proyeccion:viewProy,impuestos:viewImp,notas:viewNotas,ons:viewOns,tecnicos:viewTec,benchmarks:viewBench,datos:viewDatos}[state.tab];
     v.innerHTML=(state.demo?`<div class="banner"><span><b>Datos de ejemplo.</b> Activos y montos inventados para mostrar cómo se ve el tablero.</span><button class="btn sm" data-act="exitdemo">Salir del ejemplo</button></div>`:'')+fn();
   }
   charts.forEach(f=>f());
@@ -981,6 +981,73 @@ function viewProy(){
   <div class="tw" style="max-height:520px"><table><thead><tr><th>Fecha</th><th>Activo</th><th>Concepto</th><th>Monto (${cc})</th><th>Base</th></tr></thead><tbody>${R.ev.slice(0,80).map(e=>`<tr><td>${dlab(e.t)}${e.pending?' <span class="badge" title="Posterior a tu último movimiento cargado">por confirmar</span>':''}</td><td class="tk">${e.tk}</td><td>${kindBadge(e.kind)}${e.kind==='Dividendo'?` <span class="badge">${e.ann?'anunciado':'estimado'}</span>`:''}</td><td class="num">${money(cv(e.u),cc)}</td><td class="mut">${e.n} cobro${e.n>1?'s':''} previos</td></tr>`).join('')}</tbody></table></div>
   ${R.skipped.length?`<p class="mut" style="font-size:12.5px;margin-top:10px">Sin proyección por tener un solo cobro: ${R.skipped.join(', ')}. <label class="row2" style="display:inline-flex"><input type="checkbox" data-act="assume" ${state.assumeOne?'checked':''}> Incluirlos suponiendo pago trimestral</label></p>`:''}
   </section>`;
+}
+/* ============ cronograma de ONs: flujos, TIR y duración ============ */
+function onSchedule(M,bonds){
+  const out=[],skipped=[];const now=M.nowT,fx=M.fxNow;
+  for(const p of M.list){
+    if(!(p.qty>0)||p.tipo!=='Corporativos')continue;
+    const b=bonds[p.tk];
+    if(!b||!b.venc){skipped.push([p.tk,'falta el vencimiento']);continue}
+    const venc=parseDate(b.venc);if(venc==null||venc<=now){skipped.push([p.tk,venc==null?'vencimiento inválido':'ya venció']);continue}
+    const am=(b.amort||[]).map(([d,pc])=>({t:parseDate(d),f:pc/100})).filter(x=>x.t!=null).sort((a,c)=>a.t-c.t);
+    const rem=t=>Math.max(0,1-am.filter(x=>x.t<=t).reduce((q,x)=>q+x.f,0));
+    // cupones cobrados: una fila por fecha, por unidad de nominal vigente ese día
+    const g={};for(const i of M.incomes.filter(i=>i.tk===p.tk&&i.kind==='Renta'&&i.amt>=0)){g[i.t]=(g[i.t]||0)+i.u}
+    const dates=Object.keys(g).map(Number).sort((a,c)=>a-c);
+    if(!dates.length){skipped.push([p.tk,'sin rentas cobradas para estimar el cupón']);continue}
+    const qAt=t=>M.events.filter(e=>e.tk===p.tk&&e.t<=t).reduce((q,e)=>q+(e.dq||0),0);
+    let step=+b.freq;
+    if(!step){if(dates.length>=2){const gp=[];for(let i=1;i<dates.length;i++)gp.push(dates[i]-dates[i-1]);gp.sort((a,c)=>a-c);const md=gp[Math.floor(gp.length/2)];step=md<45?1:md<135?3:md<270?6:12}
+      else{skipped.push([p.tk,'falta la frecuencia (una sola renta cobrada)']);continue}}
+    const lt=dates[dates.length-1],q0=qAt(lt);if(!(q0>0)){skipped.push([p.tk,'sin cantidad al último cupón']);continue}
+    const base=rem(lt-1)||1,rate=g[lt]/q0/base;                 // cupón por período sobre 1 de capital vigente
+    const flows=[];let prev=lt,k=1;
+    for(;;k++){let t=addMonths(lt,step*k);if(t>=venc-20){t=venc}
+      if(t>now)flows.push({t,c:rate*rem(t-1),a:0});prev=t;if(t>=venc)break;if(k>400)break}
+    for(const a of am){if(a.t<=now)continue;let f=flows.find(x=>x.t===a.t);if(!f){f={t:a.t,c:0,a:0};flows.push(f)}f.a+=a.f}
+    const fin=flows.find(x=>x.t===venc);const left=rem(venc);if(left>0){if(fin)fin.a+=left;else flows.push({t:venc,c:0,a:left})}
+    flows.sort((x,y)=>x.t-y.t);
+    // cupón corrido: días desde el último cobro dentro del período en curso
+    const nextC=flows.find(x=>x.c>0),pe=nextC?nextC.t:venc,ps=addMonths(pe,-step),sinceT=Math.max(ps,lt);
+    const accr=nextC&&now>sinceT?nextC.c*Math.min(1,(now-sinceT)/Math.max(1,pe-ps)):0;
+    const clean=p.px/fx,dirty=clean+accr,outst=rem(now);
+    const fl=[{t:now,v:-dirty},...flows.map(x=>({t:x.t,v:x.c+x.a}))];
+    const y=xirr(fl);
+    let pv=0,wt=0,wl=0,sa=0;
+    if(y!=null)for(const f of flows){const v=f.c+f.a,d=(f.t-now)/365,w=v/Math.pow(1+y,d);pv+=w;wt+=w*d;wl+=f.a*d;sa+=f.a}
+    const dur=pv>0?wt/pv:null,ann=rate*12/step*outst;
+    out.push({tk:p.tk,qty:p.qty,venc,step,rate:rate*12/step,clean,accr,y,dur,mdur:dur!=null&&y!=null?dur/(1+y):null,life:sa>0?wl/sa:null,cy:clean>0?ann/clean:null,par:outst+accr>0?clean/(outst+accr):null,outst,flows,vU:p.qty*clean,hasCur:p.hasCur,
+      total:flows.reduce((q,x)=>q+(x.c+x.a)*p.qty,0)});
+  }
+  return {out,skipped};
+}
+function viewOns(){
+  const bonds=state.mkt.bonds||{},R=onSchedule(M,bonds),O=R.out.sort((a,b)=>b.vU-a.vU);
+  const tv=O.reduce((q,x)=>q+x.vU,0)||1,w=f=>{const xs=O.filter(x=>x[f]!=null);const t=xs.reduce((q,x)=>q+x.vU,0);return t?xs.reduce((q,x)=>q+x[f]*x.vU,0)/t:null};
+  const tir=w('y'),dur=w('dur'),mdur=w('mdur'),cy=w('cy'),life=w('life');
+  const fm=t=>{const d=new Date(t*DAY);return d.getUTCFullYear()+'-'+String(d.getUTCMonth()+1).padStart(2,'0')};
+  const byM={};for(const x of O)for(const f of x.flows){const k=fm(f.t),o=byM[k]||(byM[k]={c:0,a:0});o.c+=f.c*x.qty;o.a+=f.a*x.qty}
+  const ks=Object.keys(byM).sort().slice(0,36);
+  charts.push(()=>{const el=$('#chOns');if(!el||!ks.length)return;barChart(el,{cats:ks.map(k=>mlab(parseDate(k+'-01'))),series:[{name:'Renta',color:'var(--s1)',vals:ks.map(k=>byM[k].c)},{name:'Amortización',color:'var(--s2)',vals:ks.map(k=>byM[k].a)}],yfmt:v=>money(v,'USD',{compact:true}),tfmt:v=>money(v,'USD'),label:'Cobros de ONs por mes'})});
+  const yl=y=>y==null?'<span class="mut">—</span>':`<span class="${y>=0?'pos':'neg'}">${pct(y)}</span>`;
+  const yr=v=>v==null?'—':v.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});
+  const rows=O.map(x=>{
+    let r=`<tr class="row" data-act="open" data-v="${x.tk}" style="cursor:pointer"><td class="tk">${x.tk}${x.hasCur?'':' <span class="badge" title="Valuada al último precio operado">últ. op.</span>'}</td><td>${dlab(x.venc)}</td><td class="num">${nfQ.format(x.qty)}</td><td class="num">${pct(x.rate)}</td><td class="num">${(x.clean*100).toLocaleString('es-AR',{maximumFractionDigits:2})}</td><td class="num">${yl(x.y)}</td><td class="num">${yr(x.dur)}</td><td class="num">${yr(x.life)}</td><td class="num">${pct(x.cy)}</td><td class="num">${x.par==null?'—':pct(x.par)}</td><td class="num">${money(x.total,'USD')}</td></tr>`;
+    if(state.open===x.tk)r+=`<tr class="det"><td colspan="11"><b>${x.tk}</b> · cobros futuros por ${nfQ.format(x.qty)} nominales (USD)<div class="tw" style="margin-top:8px;max-height:300px"><table><thead><tr><th>Fecha</th><th>Renta</th><th>Amortización</th><th>Total</th><th>Capital después</th></tr></thead><tbody>${x.flows.map(f=>`<tr><td>${dlab(f.t)}</td><td class="num">${money(f.c*x.qty,'USD')}</td><td class="num">${f.a?money(f.a*x.qty,'USD'):'—'}</td><td class="num">${money((f.c+f.a)*x.qty,'USD')}</td><td class="num">${pct(Math.max(0,x.flows.filter(z=>z.t>f.t).reduce((q,z)=>q+z.a,0)))}</td></tr>`).join('')}</tbody></table></div><p class="mut" style="font-size:12.5px;margin:6px 0 0">Cupón anual ${pct(x.rate)} sobre capital vigente (estimado con la última renta cobrada) · cupón corrido ${(x.accr*100).toFixed(2)} cada 100 · duración modificada ${yr(x.mdur)}</p></td></tr>`;
+    return r;
+  }).join('');
+  const sk=R.skipped.length?`<div class="banner warn"><span><b>Sin cronograma:</b> ${R.skipped.map(([t,m])=>`<b>${t}</b> (${m})`).join(', ')}. Completalos en la tabla de ONs de la pestaña Proyección.</span></div>`:'';
+  return warnBanners()+`<div class="sec-h"><div><h2 style="font:700 20px var(--f-display);margin:0">Cronograma de ONs</h2><p class="mut" style="margin:2px 0 0">Flujos futuros, TIR y duración de tus Obligaciones Negociables, en dólares. Tocá una fila para ver cada cobro.</p></div></div>${sk}
+  ${O.length?`<section class="cmp"><div><div class="lbl">TIR ponderada</div><div class="v ${tir>=0?'pos':'neg'}">${pct(tir)}</div><div class="mut" style="font-size:12.5px">al precio de hoy, en USD</div></div>
+   <div><div class="lbl">Duración</div><div class="v">${yr(dur)} años</div><div class="mut" style="font-size:12.5px">modificada ${yr(mdur)}</div></div>
+   <div><div class="lbl">Vida promedio</div><div class="v">${yr(life)} años</div><div class="mut" style="font-size:12.5px">del capital a cobrar</div></div>
+   <div><div class="lbl">Renta corriente</div><div class="v">${pct(cy)}</div><div class="mut" style="font-size:12.5px">cupón anual / precio</div></div>
+   <div><div class="lbl">Valor en ONs</div><div class="v">${money(tv,'USD',{compact:true})}</div><div class="mut" style="font-size:12.5px">${O.length} títulos</div></div>
+   <div><div class="lbl">Por cobrar hasta el final</div><div class="v">${money(O.reduce((q,x)=>q+x.total,0),'USD',{compact:true})}</div><div class="mut" style="font-size:12.5px">rentas + capital</div></div></section>
+  <section class="panel"><h2>Cobros por mes · USD</h2><div class="chart" id="chOns"></div></section>
+  <div class="tw"><table><thead><tr><th>ON</th><th>Vencimiento</th><th>Nominales</th><th>Cupón</th><th>Precio (c/100)</th><th>TIR</th><th>Duración</th><th>Vida prom.</th><th>Renta corr.</th><th>Paridad</th><th>Por cobrar</th></tr></thead><tbody>${rows}</tbody></table></div>
+  <p class="mut" style="font-size:12.5px;margin:10px 0 0">El cupón se estima con la última renta que cobraste y se aplica al capital que queda tras cada amortización. La TIR usa el precio limpio más el cupón corrido y supone que cobrás todo en término. Es una estimación: contrastala con el prospecto antes de decidir.</p>`:(sk?'':'<p class="mut">No tenés ONs en cartera.</p>')}`;
 }
 function techSeries(tk){
   const raw=((state.auto||{}).history||{})[tk];if(!raw||raw.length<30)return null;
