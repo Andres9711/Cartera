@@ -690,7 +690,7 @@ function donutSvg(items,centerBig,centerSmall){
 }
 
 /* ============ estado y datos de ejemplo ============ */
-const state={tab:'resumen',cur:'ARS',method:'avg',raw:{},mkt:{fx:[],spy:[],ipc:[],prices:{},hist:{},fxManual:0,sectors:{},bonds:{},notes:{}},meta:null,demo:false,per:'month',sort:{k:'vA',d:-1},showClosed:false,assumeOne:false,taxYear:0,open:null,fTk:'',fSide:'',loaded:false};
+const state={tab:'resumen',cur:'ARS',method:'avg',raw:{},mkt:{fx:[],spy:[],ipc:[],prices:{},hist:{},fxManual:0,sectors:{},bonds:{},notes:{}},meta:null,demo:false,per:'month',sort:{k:'vA',d:-1},fSort:'w',fDir:-1,showClosed:false,assumeOne:false,taxYear:0,open:null,fTk:'',fSide:'',loaded:false};
 try{const p=JSON.parse(localStorage.getItem(LS+'ui')||'{}');if(p.cur)state.cur=p.cur;if(p.tab)state.tab=p.tab;if(p.method)state.method=p.method}catch(e){}
 const saveUi=()=>{try{localStorage.setItem(LS+'ui',JSON.stringify({cur:state.cur,tab:state.tab,method:state.method}))}catch(e){}};
 function demoData(){
@@ -747,7 +747,7 @@ const ingest={
 
 /* ============ render ============ */
 let M=null,B=null,mktUse=null;
-const TABS=[['resumen','Resumen'],['posiciones','Posiciones'],['rendimiento','Rendimiento'],['operaciones','Operaciones'],['flujos','Flujos'],['proyeccion','Proyección'],['ons','ONs'],['impuestos','Impuestos'],['tecnicos','Técnicos'],['notas','Notas'],['benchmarks','Benchmarks'],['datos','Datos']];
+const TABS=[['resumen','Resumen'],['posiciones','Posiciones'],['rendimiento','Rendimiento'],['operaciones','Operaciones'],['flujos','Flujos'],['proyeccion','Proyección'],['ons','ONs'],['impuestos','Impuestos'],['tecnicos','Técnicos'],['fundamentales','Fundamentales'],['notas','Notas'],['benchmarks','Benchmarks'],['datos','Datos']];
 const isU=()=>state.cur==='USD';
 const V=(a,u)=>isU()?u:a;
 const mny=(v,o)=>money(v,state.cur,o);
@@ -760,7 +760,7 @@ async function loadAuto(){
     const toT=a=>(a||[]).map(([d,v])=>({t:parseDate(d),v:+v})).filter(x=>x.t!=null&&isFinite(x.v)).sort((a,b)=>a.t-b.t);
     let ipc=toT(j.ipc).map(x=>({t:parseDate(dstr(x.t).slice(0,7)),v:x.v}));
     if(ipc.length&&ipc.every(x=>Math.abs(x.v)<.5))ipc=ipc.map(x=>({t:x.t,v:x.v*100}));
-    state.auto={fx:toT(j.fx),spy:toT(j.spy),ipc,prices:j.prices||{},dividends:j.dividends||{},history:j.history||{},updated:j.updated||'',status:j.status||{}};
+    state.auto={fx:toT(j.fx),spy:toT(j.spy),ipc,prices:j.prices||{},dividends:j.dividends||{},history:j.history||{},fundamentals:j.fundamentals||{},updated:j.updated||'',status:j.status||{}};
   }catch(e){}
 }
 function effMkt(){
@@ -787,7 +787,7 @@ function render(){
   $('#meta').textContent=M?`${rawList().length||state.demoRows?.length||0} movimientos · hasta ${dlab(M.nowT)}${state.auto&&state.auto.updated?' · mercado al '+state.auto.updated.slice(0,10):''}`:'';
   if(!M){v.innerHTML=state.tab==='datos'?viewDatos():viewEmpty();}
   else{
-    const fn={resumen:viewResumen,posiciones:viewPos,rendimiento:viewRend,operaciones:viewOps,flujos:viewFlujos,proyeccion:viewProy,impuestos:viewImp,notas:viewNotas,ons:viewOns,tecnicos:viewTec,benchmarks:viewBench,datos:viewDatos}[state.tab];
+    const fn={resumen:viewResumen,posiciones:viewPos,rendimiento:viewRend,operaciones:viewOps,flujos:viewFlujos,proyeccion:viewProy,impuestos:viewImp,notas:viewNotas,ons:viewOns,tecnicos:viewTec,fundamentales:viewFun,benchmarks:viewBench,datos:viewDatos}[state.tab];
     v.innerHTML=(state.demo?`<div class="banner"><span><b>Datos de ejemplo.</b> Activos y montos inventados para mostrar cómo se ve el tablero.</span><button class="btn sm" data-act="exitdemo">Salir del ejemplo</button></div>`:'')+fn();
   }
   charts.forEach(f=>f());
@@ -1048,6 +1048,35 @@ function viewOns(){
   <section class="panel"><h2>Cobros por mes · USD</h2><div class="chart" id="chOns"></div></section>
   <div class="tw"><table><thead><tr><th>ON</th><th>Vencimiento</th><th>Nominales</th><th>Cupón</th><th>Precio (c/100)</th><th>TIR</th><th>Duración</th><th>Vida prom.</th><th>Renta corr.</th><th>Paridad</th><th>Por cobrar</th></tr></thead><tbody>${rows}</tbody></table></div>
   <p class="mut" style="font-size:12.5px;margin:10px 0 0">El cupón se estima con la última renta que cobraste y se aplica al capital que queda tras cada amortización. La TIR usa el precio limpio más el cupón corrido y supone que cobrás todo en término. Es una estimación: contrastala con el prospecto antes de decidir.</p>`:(sk?'':'<p class="mut">No tenés ONs en cartera.</p>')}`;
+}
+function viewFun(){
+  const F=(state.auto||{}).fundamentals||{};
+  const held=M.list.filter(p=>p.qty>0&&F[p.tk]);
+  const tot=M.list.filter(p=>p.qty>0).reduce((q,p)=>q+p.vA,0)||1;
+  const rows=held.map(p=>({tk:p.tk,w:p.vA/tot,...F[p.tk]}));
+  const cov=rows.reduce((q,r)=>q+r.w,0);
+  const wavg=(f,ok=v=>v!=null)=>{const xs=rows.filter(r=>ok(r[f]));const t=xs.reduce((q,r)=>q+r.w,0);return t?xs.reduce((q,r)=>q+r[f]*r.w,0)/t:null};
+  // P/E de la cartera = inversa del rendimiento por ganancias ponderado (evita que un P/E enorme distorsione)
+  const ey=(()=>{const xs=rows.filter(r=>r.pe>0);const t=xs.reduce((q,r)=>q+r.w,0);return t?xs.reduce((q,r)=>q+r.w/r.pe,0)/t:null})();
+  const k=state.fSort,d=state.fDir;
+  rows.sort((a,b)=>{const x=a[k],y=b[k];if(typeof x==='string'||typeof y==='string')return d*String(x||'').localeCompare(String(y||''));return d*((x==null?-Infinity:x)-(y==null?-Infinity:y))||b.w-a.w});
+  const n=(v,dec=1)=>v==null?'<span class="mut">—</span>':v.toLocaleString('es-AR',{minimumFractionDigits:dec,maximumFractionDigits:dec});
+  const pc=(v,sg)=>v==null?'<span class="mut">—</span>':`<span class="${sg?(v>=0?'pos':'neg'):''}">${n(v)}%</span>`;
+  const pe=v=>v==null?'<span class="mut">—</span>':v<=0?'<span class="neg" title="Pérdidas">n/d</span>':n(v);
+  const th=(f,l)=>`<th class="${state.fSort===f?'sorted':''}" style="cursor:pointer${f==='industry'?';text-align:left':''}" data-act="fsort" data-v="${f}">${l}${state.fSort===f?(state.fDir<0?' ↓':' ↑'):''}</th>`;
+  const big=v=>v==null?'—':v>=1e6?'US$ '+n(v/1e6,2)+' B':v>=1e3?'US$ '+n(v/1e3,0)+' mil M':'US$ '+n(v,0)+' M';
+  const body=rows.map(r=>`<tr><td class="tk">${r.tk}</td><td class="mut" style="text-align:left;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.name||'')}">${esc(r.industry||'')}</td><td class="num">${pct(r.w)}</td><td class="num">${pe(r.pe)}</td><td class="num">${n(r.pb)}</td><td class="num">${pc(r.roe,1)}</td><td class="num">${pc(r.margin,1)}</td><td class="num">${pc(r.revg,1)}</td><td class="num">${pc(r.dy)}</td><td class="num">${n(r.de,2)}</td><td class="num">${big(r.mcap)}</td></tr>`).join('');
+  const st=(state.auto||{}).status||{};
+  return `<div class="sec-h"><div><h2 style="font:700 20px var(--f-display);margin:0">Fundamentales</h2><p class="mut" style="margin:2px 0 0">Valuación, rentabilidad y deuda de las empresas detrás de tus CEDEARs. Tocá un encabezado para ordenar.</p></div></div>
+  ${rows.length?`<section class="cmp"><div><div class="lbl">P/E de la cartera</div><div class="v">${n(ey?1/ey:null)}</div><div class="mut" style="font-size:12.5px">ponderado por valor</div></div>
+   <div><div class="lbl">ROE ponderado</div><div class="v">${n(wavg('roe'))}%</div><div class="mut" style="font-size:12.5px">retorno sobre patrimonio</div></div>
+   <div><div class="lbl">Margen neto</div><div class="v">${n(wavg('margin'))}%</div><div class="mut" style="font-size:12.5px">ganancia / ventas</div></div>
+   <div><div class="lbl">Crec. de ventas</div><div class="v">${n(wavg('revg'))}%</div><div class="mut" style="font-size:12.5px">último año</div></div>
+   <div><div class="lbl">Dividend yield</div><div class="v">${n(wavg('dy'))}%</div><div class="mut" style="font-size:12.5px">anual indicado</div></div>
+   <div><div class="lbl">Cobertura</div><div class="v">${pct(cov)}</div><div class="mut" style="font-size:12.5px">de la cartera con datos</div></div></section>
+  <div class="tw"><table><thead><tr>${th('tk','Activo')}${th('industry','Industria')}${th('w','Peso')}${th('pe','P/E')}${th('pb','P/B')}${th('roe','ROE')}${th('margin','Margen neto')}${th('revg','Crec. ventas')}${th('dy','Div. yield')}${th('de','Deuda / patrim.')}${th('mcap','Capitalización')}</tr></thead><tbody>${body}</tbody></table></div>
+  <p class="mut" style="font-size:12.5px;margin:10px 0 0">Datos de Finnhub, en dólares y sobre los últimos doce meses; se actualizan con la corrida diaria. Los ETFs no tienen fundamentales. El P/E de la cartera excluye empresas con pérdidas.</p>`
+  :`<div class="banner warn"><span><b>Todavía no hay datos.</b> ${st.fundamentals&&st.fundamentals!=='ok'?'Estado: '+esc(st.fundamentals)+'. ':''}Revisá que el secreto FINNHUB_KEY esté cargado y corré el workflow a mano (Actions → Run workflow).</span></div>`}`;
 }
 function techSeries(tk){
   const raw=((state.auto||{}).history||{})[tk];if(!raw||raw.length<30)return null;
@@ -1317,6 +1346,7 @@ document.addEventListener('click',async ev=>{
     else if(v==='income'){n='dividendos-rentas';h=['Activo','Concepto','Cobros','Bruto USD','Bruto ARS','Retencion ARS','Neto ARS'];r=D.inc.map(x=>[x.tk,x.kind,x.n,x.gU,x.gA,x.tA,x.gA+x.tA])}
     else{n='tenencia';h=['Activo','Tipo','Cantidad','Precio ARS','Valor ARS','Valor USD'];r=D.hold.map(x=>[x.tk,x.tipo||'',x.q,x.px,x.vA,x.vU])}
     await download(`cartera-${n}-${D.y}.csv`,csvText(h,r),'text/csv')}
+  else if(a==='fsort'){state.fDir=state.fSort===v?-state.fDir:-1;state.fSort=v;render()}
   else if(a==='ntadd'){const tk=normTk($('#ntNew').value);if(!tk){toast('Escribí el ticker');return}state.mkt.notes=state.mkt.notes||{};state.mkt.notes[tk]=state.mkt.notes[tk]||{why:''};await persistMkt();render()}
   else if(a==='assume'){state.assumeOne=el.checked;render()}
   else if(a==='savebonds'){state.mkt.bonds=state.mkt.bonds||{};document.querySelectorAll('[data-bv]').forEach(i=>{const tk=i.dataset.bv,txt=document.querySelector('[data-ba="'+tk+'"]').value,fq=+document.querySelector('[data-bf="'+tk+'"]').value||0;const am=txt.split(',').map(x=>x.trim()).filter(Boolean).map(x=>{const [d,pc]=x.split(':');return [d.trim(),num(pc)]}).filter(x=>parseDate(x[0])!=null&&x[1]>0);

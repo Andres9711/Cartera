@@ -28,6 +28,8 @@ jobs:
       - name: Bajar datos de mercado
         id: update
         continue-on-error: true
+        env:
+          FINNHUB_KEY: ${{ secrets.FINNHUB_KEY }}
         run: python scripts/update_market.py
       - name: Guardar datos en el repositorio
         run: |

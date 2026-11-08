@@ -34,11 +34,11 @@ NQ_HEADERS = {
 DIV_BACK, DIV_AHEAD = 110, 75   # días hacia atrás (para calibrar el monto) y hacia adelante
 
 
-def get(url, tries=3):
+def get(url, tries=3, headers=None):
     last = None
     for i in range(tries):
         try:
-            req = urllib.request.Request(url, headers=UA)
+            req = urllib.request.Request(url, headers={**UA, **(headers or {})})
             with urllib.request.urlopen(req, timeout=40) as r:
                 return json.loads(r.read().decode("utf-8-sig"))
         except Exception as e:  # noqa: BLE001
@@ -211,13 +211,59 @@ def fetch_history(tickers=None):
     return out, bad
 
 
+FH_PAUSE = 1.1
+FH = "https://finnhub.io/api/v1/"
+FH_SYMBOL = {"BRKB": "BRK.B"}   # CEDEAR → símbolo de EE.UU. cuando difieren
+FH_FIELDS = {
+    "pe": "peTTM", "pb": "pbQuarterly", "ps": "psTTM", "roe": "roeTTM", "margin": "netProfitMarginTTM",
+    "opm": "operatingMarginTTM", "revg": "revenueGrowthTTMYoy", "epsg": "epsGrowthTTMYoy",
+    "dy": "dividendYieldIndicatedAnnual", "de": "totalDebt/totalEquityQuarterly", "beta": "beta",
+    "hi": "52WeekHigh", "lo": "52WeekLow", "mcap": "marketCapitalization",
+}
+
+
+def fetch_fundamentals(key=None, tickers=None, pause=None):
+    """Ratios fundamentales de Finnhub (plan gratuito: 60 consultas por minuto). La clave va en un header."""
+    key = key or os.environ.get("FINNHUB_KEY", "").strip()
+    if not key:
+        raise RuntimeError("falta el secreto FINNHUB_KEY")
+    if tickers is None:
+        with open(TICKERS, encoding="utf-8") as f:
+            tickers = [l.strip().upper() for l in f if l.strip() and not l.lstrip().startswith("#")]
+    pause = FH_PAUSE if pause is None else pause
+    hdr = {"X-Finnhub-Token": key}
+    out, bad = {}, []
+    for tk in tickers:
+        sym = FH_SYMBOL.get(tk, tk)
+        try:
+            m = (get(f"{FH}stock/metric?symbol={sym}&metric=all", tries=2, headers=hdr) or {}).get("metric") or {}
+            time.sleep(pause)
+            if not m or not any(m.get(v) is not None for v in FH_FIELDS.values()):
+                bad.append(tk)   # ETFs y fondos no tienen fundamentales
+                continue
+            pr = get(f"{FH}stock/profile2?symbol={sym}", tries=2, headers=hdr) or {}
+            time.sleep(pause)
+            o = {k: round(float(m[v]), 4) for k, v in FH_FIELDS.items() if isinstance(m.get(v), (int, float))}
+            o["name"] = pr.get("name", "")
+            o["industry"] = pr.get("finnhubIndustry", "")
+            out[tk] = o
+        except Exception as e:  # noqa: BLE001
+            msg = str(e)
+            if "401" in msg or "403" in msg:
+                raise RuntimeError("Finnhub rechazó la clave (revisá FINNHUB_KEY)")
+            bad.append(tk)
+    if not out:
+        raise RuntimeError("Finnhub no devolvió fundamentales")
+    return out, bad
+
+
 def main():
     try:
         with open(OUT, encoding="utf-8") as f:
             prev = json.load(f)
     except Exception:  # noqa: BLE001
         prev = {}
-    data = {k: prev.get(k) for k in ("fx", "ipc", "prices", "spy", "dividends", "history")}
+    data = {k: prev.get(k) for k in ("fx", "ipc", "prices", "spy", "dividends", "history", "fundamentals")}
     status, failed = {}, False
 
     def run(name, fn, soft=False):
@@ -256,6 +302,11 @@ def main():
         data["history"] = hs[0]
         if hs[1]:
             status["history"] = "ok (sin datos: " + ", ".join(hs[1])[:150] + ")"
+    fd = run("fundamentals", fetch_fundamentals, soft=True)
+    if fd:
+        data["fundamentals"] = fd[0]
+        if fd[1]:
+            status["fundamentals"] = "ok (sin datos: " + ", ".join(fd[1])[:150] + ")"
     data["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     data["status"] = status
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
