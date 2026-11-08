@@ -747,7 +747,7 @@ const ingest={
 
 /* ============ render ============ */
 let M=null,B=null,mktUse=null;
-const TABS=[['resumen','Resumen'],['posiciones','Posiciones'],['rendimiento','Rendimiento'],['operaciones','Operaciones'],['flujos','Flujos'],['proyeccion','Proyección'],['impuestos','Impuestos'],['notas','Notas'],['benchmarks','Benchmarks'],['datos','Datos']];
+const TABS=[['resumen','Resumen'],['posiciones','Posiciones'],['rendimiento','Rendimiento'],['operaciones','Operaciones'],['flujos','Flujos'],['proyeccion','Proyección'],['impuestos','Impuestos'],['tecnicos','Técnicos'],['notas','Notas'],['benchmarks','Benchmarks'],['datos','Datos']];
 const isU=()=>state.cur==='USD';
 const V=(a,u)=>isU()?u:a;
 const mny=(v,o)=>money(v,state.cur,o);
@@ -760,7 +760,7 @@ async function loadAuto(){
     const toT=a=>(a||[]).map(([d,v])=>({t:parseDate(d),v:+v})).filter(x=>x.t!=null&&isFinite(x.v)).sort((a,b)=>a.t-b.t);
     let ipc=toT(j.ipc).map(x=>({t:parseDate(dstr(x.t).slice(0,7)),v:x.v}));
     if(ipc.length&&ipc.every(x=>Math.abs(x.v)<.5))ipc=ipc.map(x=>({t:x.t,v:x.v*100}));
-    state.auto={fx:toT(j.fx),spy:toT(j.spy),ipc,prices:j.prices||{},dividends:j.dividends||{},updated:j.updated||'',status:j.status||{}};
+    state.auto={fx:toT(j.fx),spy:toT(j.spy),ipc,prices:j.prices||{},dividends:j.dividends||{},history:j.history||{},updated:j.updated||'',status:j.status||{}};
   }catch(e){}
 }
 function effMkt(){
@@ -787,7 +787,7 @@ function render(){
   $('#meta').textContent=M?`${rawList().length||state.demoRows?.length||0} movimientos · hasta ${dlab(M.nowT)}${state.auto&&state.auto.updated?' · mercado al '+state.auto.updated.slice(0,10):''}`:'';
   if(!M){v.innerHTML=state.tab==='datos'?viewDatos():viewEmpty();}
   else{
-    const fn={resumen:viewResumen,posiciones:viewPos,rendimiento:viewRend,operaciones:viewOps,flujos:viewFlujos,proyeccion:viewProy,impuestos:viewImp,notas:viewNotas,benchmarks:viewBench,datos:viewDatos}[state.tab];
+    const fn={resumen:viewResumen,posiciones:viewPos,rendimiento:viewRend,operaciones:viewOps,flujos:viewFlujos,proyeccion:viewProy,impuestos:viewImp,notas:viewNotas,tecnicos:viewTec,benchmarks:viewBench,datos:viewDatos}[state.tab];
     v.innerHTML=(state.demo?`<div class="banner"><span><b>Datos de ejemplo.</b> Activos y montos inventados para mostrar cómo se ve el tablero.</span><button class="btn sm" data-act="exitdemo">Salir del ejemplo</button></div>`:'')+fn();
   }
   charts.forEach(f=>f());
@@ -981,6 +981,74 @@ function viewProy(){
   <div class="tw" style="max-height:520px"><table><thead><tr><th>Fecha</th><th>Activo</th><th>Concepto</th><th>Monto (${cc})</th><th>Base</th></tr></thead><tbody>${R.ev.slice(0,80).map(e=>`<tr><td>${dlab(e.t)}${e.pending?' <span class="badge" title="Posterior a tu último movimiento cargado">por confirmar</span>':''}</td><td class="tk">${e.tk}</td><td>${kindBadge(e.kind)}${e.kind==='Dividendo'?` <span class="badge">${e.ann?'anunciado':'estimado'}</span>`:''}</td><td class="num">${money(cv(e.u),cc)}</td><td class="mut">${e.n} cobro${e.n>1?'s':''} previos</td></tr>`).join('')}</tbody></table></div>
   ${R.skipped.length?`<p class="mut" style="font-size:12.5px;margin-top:10px">Sin proyección por tener un solo cobro: ${R.skipped.join(', ')}. <label class="row2" style="display:inline-flex"><input type="checkbox" data-act="assume" ${state.assumeOne?'checked':''}> Incluirlos suponiendo pago trimestral</label></p>`:''}
   </section>`;
+}
+function techSeries(tk){
+  const raw=((state.auto||{}).history||{})[tk];if(!raw||raw.length<30)return null;
+  let ser=raw.map(([d,v])=>({t:parseDate(d),p:+v})).filter(x=>x.t!=null&&x.p>0).sort((a,b)=>a.t-b.t),adj=[];
+  // un CEDEAR que se parte cae a 1/N de un día para el otro: se corrige hacia atrás
+  for(let i=ser.length-1;i>0;i--){const r=ser[i-1].p/ser[i].p,n=Math.round(r);
+    if(r>=1.8&&n<=12&&Math.abs(r-n)/n<0.06){for(let j=0;j<i;j++)ser[j].p/=n;adj.push({t:ser[i].t,f:n})}}
+  return {ser,adj};
+}
+const smaAt=(a,n)=>a.length>=n?a.slice(-n).reduce((s,x)=>s+x,0)/n:null;
+function rsi14(c){
+  if(c.length<30)return null;let g=0,l=0;
+  for(let i=1;i<=14;i++){const d=c[i]-c[i-1];d>0?g+=d:l-=d}g/=14;l/=14;
+  for(let i=15;i<c.length;i++){const d=c[i]-c[i-1];g=(g*13+(d>0?d:0))/14;l=(l*13+(d<0?-d:0))/14}
+  return l===0?100:100-100/(1+g/l);
+}
+function techData(){
+  const out=[],missing=[];
+  for(const p of M.list.filter(p=>p.qty>0).sort((a,b)=>b.vA-a.vA)){
+    const S=techSeries(p.tk);
+    if(!S){if(p.tipo==='Cedears')missing.push(p.tk);continue}
+    const ser=S.ser.slice();
+    if(p.px>0&&ser[ser.length-1].t<M.nowT)ser.push({t:M.nowT,p:p.px});
+    const c=ser.map(x=>x.p),last=c[c.length-1],t1=ser[ser.length-1].t;
+    const yr=ser.filter(x=>x.t>t1-365),hi=Math.max(...yr.map(x=>x.p)),lo=Math.min(...yr.map(x=>x.p));
+    const ret=d=>{const i=lastLE(ser,t1-d);return i>=0&&ser[i].t>t1-d-8?last/ser[i].p-1:null};
+    const m20=smaAt(c,20),m50=smaAt(c,50),m200=smaAt(c,200),r=rsi14(c);
+    let trend='Sin datos suficientes',tc='';
+    if(m200){if(last>m200&&m50>m200){trend='Alcista';tc='pos'}else if(last<m200&&m50<m200){trend='Bajista';tc='neg'}else trend='Mixta'}
+    else if(m50){trend=last>m50?'Sobre MA50':'Bajo MA50';tc=last>m50?'pos':'neg'}
+    let zone='';if(r!=null)zone=r>=70?'Sobrecomprado':r<=30?'Sobrevendido':'';
+    out.push({tk:p.tk,last,m20,m50,m200,r,hi,lo,fromHi:last/hi-1,fromLo:last/lo-1,r1m:ret(30),r3m:ret(91),r6m:ret(182),trend,tc,zone,ser,adj:S.adj,n:ser.length,t1,vA:p.vA});
+  }
+  return {out,missing};
+}
+function spark(ser){
+  const x=ser.slice(-90);if(x.length<5)return '';
+  const lo=Math.min(...x.map(a=>a.p)),hi=Math.max(...x.map(a=>a.p)),W=84,H=24,sp=hi-lo||1;
+  const d=x.map((a,i)=>(i?'L':'M')+(i/(x.length-1)*W).toFixed(1)+' '+(H-2-(a.p-lo)/sp*(H-4)).toFixed(1)).join('');
+  const up=x[x.length-1].p>=x[0].p;
+  return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" aria-hidden="true"><path d="${d}" fill="none" stroke="${up?'var(--pos)':'var(--neg)'}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+}
+function viewTec(){
+  const D=techData(),ups=(state.auto||{}).updated;
+  const rsiCell=r=>r==null?'—':`<span class="${r>=70?'neg':r<=30?'pos':''}">${r.toFixed(0)}</span>`;
+  const dv=(v,o)=>v==null?'<span class="mut">—</span>':`<span class="${v>=0?'pos':'neg'}">${pct(v,{sign:true})}</span>`;
+  const rows=D.out.map(x=>{
+    const op=state.open===x.tk;
+    let r=`<tr class="row" data-act="open" data-v="${x.tk}" style="cursor:pointer"><td class="tk">${x.tk}${x.adj.length?` <span class="badge" title="Se corrigió un split ×${x.adj.map(a=>a.f).join(', ×')} en el histórico">split</span>`:''}</td><td class="num">${nfP.format(x.last)}</td><td class="num">${dv(x.m50?x.last/x.m50-1:null)}</td><td class="num">${dv(x.m200?x.last/x.m200-1:null)}</td><td class="num">${rsiCell(x.r)}</td><td class="num">${dv(x.fromHi)}</td><td class="num">${dv(x.r1m)}</td><td class="num">${dv(x.r3m)}</td><td>${spark(x.ser)}</td><td><span class="badge ${x.tc==='pos'?'buy':x.tc==='neg'?'sell':''}">${x.trend}</span>${x.zone?` <span class="badge">${x.zone}</span>`:''}</td></tr>`;
+    if(op)r+=`<tr class="det"><td colspan="10"><b>${x.tk}</b> · último año, cierres diarios en pesos<div class="chart" id="chTec" style="margin-top:8px"></div>
+      <p class="mut" style="font-size:12.5px;margin:6px 0 0">MA20 ${x.m20?nfP.format(x.m20):'—'} · MA50 ${x.m50?nfP.format(x.m50):'—'} · MA200 ${x.m200?nfP.format(x.m200):'—'} · Máx. 52 sem. ${nfP.format(x.hi)} · Mín. 52 sem. ${nfP.format(x.lo)} (${dv(x.fromLo)} desde el mínimo) · ${x.n} cierres hasta ${dlab(x.t1)}</p></td></tr>`;
+    return r;
+  }).join('');
+  const sel=D.out.find(x=>x.tk===state.open);
+  if(sel)charts.push(()=>{const el=$('#chTec');if(!el)return;
+    const yr=sel.ser.filter(a=>a.t>sel.t1-365),c=sel.ser.map(a=>a.p);
+    const ma=n=>sel.ser.map((a,i)=>i>=n-1?[a.t,c.slice(i-n+1,i+1).reduce((s,v)=>s+v,0)/n]:null).filter(Boolean).filter(a=>a[0]>sel.t1-365);
+    lineChart(el,{zero:false,h:240,series:[{name:'Precio',color:'var(--s1)',pts:yr.map(a=>[a.t,a.p])},{name:'MA50',color:'var(--s2)',pts:ma(50)},{name:'MA200',color:'var(--ink-3)',dash:true,pts:ma(200)}].filter(s=>s.pts.length>1),
+      yfmt:v=>nfP.format(v),tfmt:v=>nfP.format(v),xfmt:(t,f)=>f?dlab(t):mlab(t),yfmtW:64,label:'Precio y medias móviles'})});
+  const bull=D.out.filter(x=>x.tc==='pos'&&x.trend==='Alcista').length,bear=D.out.filter(x=>x.trend==='Bajista').length,ob=D.out.filter(x=>x.zone==='Sobrecomprado').length,os=D.out.filter(x=>x.zone==='Sobrevendido').length;
+  return `<div class="sec-h"><div><h2 style="font:700 20px var(--f-display);margin:0">Análisis técnico</h2><p class="mut" style="margin:2px 0 0">Medias móviles, RSI y rango de 52 semanas de tus CEDEARs. Tocá una fila para ver el gráfico.</p></div></div>
+  ${D.out.length?`<section class="cmp"><div><div class="lbl">Tendencia alcista</div><div class="v pos">${bull}</div><div class="mut" style="font-size:12.5px">precio y MA50 sobre MA200</div></div>
+   <div><div class="lbl">Tendencia bajista</div><div class="v neg">${bear}</div><div class="mut" style="font-size:12.5px">precio y MA50 bajo MA200</div></div>
+   <div><div class="lbl">Sobrecomprados</div><div class="v">${ob}</div><div class="mut" style="font-size:12.5px">RSI de 70 o más</div></div>
+   <div><div class="lbl">Sobrevendidos</div><div class="v">${os}</div><div class="mut" style="font-size:12.5px">RSI de 30 o menos</div></div></section>
+  <div class="tw"><table><thead><tr><th>Activo</th><th>Precio</th><th>vs MA50</th><th>vs MA200</th><th>RSI 14</th><th>Desde máx. 52s</th><th>1 mes</th><th>3 meses</th><th>90 días</th><th>Señal</th></tr></thead><tbody>${rows}</tbody></table></div>`:`<div class="banner warn"><span><b>Todavía no hay histórico.</b> Se descarga solo con la actualización diaria: corré el workflow a mano una vez (Actions → Actualizar datos → Run workflow) y recargá.</span></div>`}
+  ${D.missing.length?`<p class="mut" style="font-size:12.5px;margin-top:10px">Sin histórico: <b>${D.missing.join(', ')}</b>. Si es un CEDEAR nuevo, agregalo a <code>config/tickers.txt</code> en el repositorio.</p>`:''}
+  <p class="mut" style="font-size:12.5px;margin:10px 0 0">Los precios son cierres en pesos de data912, con el último precio de hoy. Las señales son descriptivas, no recomendaciones. ${ups?'Datos actualizados el '+esc(ups.slice(0,10))+'.':''}</p>`;
 }
 function noteStatus(n,px){
   const t=+n.target,st=+n.stop;

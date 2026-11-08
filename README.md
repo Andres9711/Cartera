@@ -20,3 +20,6 @@ Tablero de seguimiento de portfolio. Cargás el Excel de movimientos del broker 
 - Si un día falla una fuente, mirá la pestaña Actions, paso "Bajar datos de mercado". Normalmente es un cambio de formato en una API y se arregla en `scripts/update_market.py`.
 - El calendario de dividendos viene de Nasdaq (fuente no oficial). Si falla, el tablero sigue con la estimación por historial y no se marca error en GitHub; el estado queda en `data/market.json`, campo `status.dividends`.
 - Lo que cargues a mano en la pestaña Datos del tablero pisa lo automático.
+
+## Técnicos
+El histórico diario de los CEDEARs se baja de los tickers listados en `config/tickers.txt`. Si comprás un CEDEAR nuevo, agregá su ticker en una línea nueva; se incorpora en la próxima actualización (o corriendo el workflow a mano).

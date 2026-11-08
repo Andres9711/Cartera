@@ -178,13 +178,46 @@ def fetch_spy(fx):
     return out
 
 
+TICKERS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config", "tickers.txt")
+URL_HIST = "https://data912.com/historical/cedears/"
+HIST_DAYS = 430
+
+
+def fetch_history(tickers=None):
+    """Cierres diarios en pesos de los CEDEARs de config/tickers.txt (los últimos ~14 meses)."""
+    if tickers is None:
+        with open(TICKERS, encoding="utf-8") as f:
+            tickers = [l.strip().upper() for l in f if l.strip() and not l.lstrip().startswith("#")]
+    since = (dt.date.today() - dt.timedelta(days=HIST_DAYS)).isoformat()
+    out, bad = {}, []
+    for tk in tickers:
+        try:
+            rows = get(URL_HIST + tk, tries=2)
+            ser = []
+            for r in sorted(rows, key=lambda r: str(r.get("date"))):
+                d, v = day(r.get("date", "")), num(r.get("c"))
+                if d >= since and v > 0:
+                    ser.append([d, round(v, 4)])
+            if len(ser) >= 20:
+                out[tk] = ser
+            else:
+                bad.append(tk)
+        except Exception:  # noqa: BLE001
+            bad.append(tk)
+    if not out:
+        raise RuntimeError("sin histórico para ningún ticker")
+    if bad:
+        print("[history] sin datos: " + ", ".join(bad), file=sys.stderr)
+    return out, bad
+
+
 def main():
     try:
         with open(OUT, encoding="utf-8") as f:
             prev = json.load(f)
     except Exception:  # noqa: BLE001
         prev = {}
-    data = {k: prev.get(k) for k in ("fx", "ipc", "prices", "spy", "dividends")}
+    data = {k: prev.get(k) for k in ("fx", "ipc", "prices", "spy", "dividends", "history")}
     status, failed = {}, False
 
     def run(name, fn, soft=False):
@@ -218,6 +251,11 @@ def main():
         dv = run("dividends", lambda: fetch_dividends(set(data["prices"])), soft=True)
         if dv is not None:
             data["dividends"] = dv
+    hs = run("history", fetch_history, soft=True)
+    if hs:
+        data["history"] = hs[0]
+        if hs[1]:
+            status["history"] = "ok (sin datos: " + ", ".join(hs[1])[:150] + ")"
     data["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     data["status"] = status
     os.makedirs(os.path.dirname(OUT), exist_ok=True)

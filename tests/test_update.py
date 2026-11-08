@@ -16,6 +16,9 @@ def fake_get(url, tries=3):
         return json.load(open(os.environ["CORP"]))
     if "live/arg_cedears" in url:
         return [{"symbol": "SPY", "c": 41625.0, "px_bid": 0, "px_ask": 0}, {"symbol": "KO", "c": 0.0, "px_bid": 100.0, "px_ask": 110.0}]
+    if "historical/cedears/KO" in url:
+        b = dt.date.today() - dt.timedelta(days=40)
+        return [{"date": (b + dt.timedelta(days=i)).isoformat(), "c": 100.0 + i} for i in range(30)]
     if "historical/cedears/SPY" in url:
         return [{"date": "2025-03-04", "c": 36000.0}, {"date": "2026-10-23", "c": 41000.0}]
     raise RuntimeError("sin red: " + url)
@@ -32,4 +35,6 @@ assert d["dividends"]["MSFT"][0][2] == 0.91 and d["status"]["dividends"] == "ok"
 assert d["status"]["fx"] == "ok" and d["status"]["spy"] == "ok"
 # arg_bonds, arg_notes y arg_stocks fallan en el mock: ok parcial y código 1 no corresponde porque hubo precios
 assert d["status"]["prices"].startswith("ok (parcial)"), d["status"]
+assert len(d["history"]["KO"]) == 30 and d["history"]["KO"][-1][1] == 129.0 and "SPY" not in d["history"], d.get("history", {}).keys()
+assert d["status"]["history"].startswith("ok"), d["status"]
 print("OK", code, d["status"]["prices"][:60])
