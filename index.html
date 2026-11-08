@@ -262,7 +262,7 @@ function normalizeRow(r){
     const side=(parts[2]||'').toUpperCase();
     if(side.startsWith('APCOL'))m.cls='caucion';
     else if((side==='COMPRA'||side==='VENTA')&&m.tk){m.cls='trade';m.side=side}
-  }else if(h.startsWith('dividendo en efectivo')||h==='renta'||h.startsWith('amortiz'))m.cls='income';
+  }else if(h.startsWith('dividendo en efectivo')||h==='renta'||h.startsWith('amortiz')){m.cls='income';m.inc=h==='renta'?'Renta':(h.startsWith('amortiz')?'Amortización':'Dividendo')}
   else if(h.startsWith('dividendo en acciones'))m.cls='split';
   else if(h==='recibo de cobro')m.cls='deposit';
   else if(h==='comprobante de pago')m.cls='withdrawal';
@@ -318,7 +318,7 @@ function buildModel(movs,mkt,method,nowT){
   const toARS=(m,t=m.t)=>m.cur==='ARS'?m.amt:m.amt*fxAt(t);
   const toUSD=(m,t=m.t)=>m.cur==='USD'?m.amt:m.amt/fxAt(t);
   const sorted=movs.slice().sort((a,b)=>a.t-b.t||(a.side==='COMPRA'?-1:1)-(b.side==='COMPRA'?-1:1)||a.idn-b.idn);
-  const P={},splits=[],sales=[],trades=[],events=[],ledger=[],deposits=[],withdrawals=[],warns=[];
+  const P={},incomes=[],splits=[],sales=[],trades=[],events=[],ledger=[],deposits=[],withdrawals=[],warns=[];
   let caucionARS=0,unclassified=0;
   const pos=tk=>P[tk]||(P[tk]={tk,tipo:null,qty:0,lots:[],realA:0,realU:0,gIncA:0,gIncU:0,taxA:0,taxU:0,buyA:0,buyU:0,sellA:0,sellU:0,flows:[],firstT:null,lastP:null,lastT:null,nTr:0});
   for(const m of sorted){
@@ -363,6 +363,7 @@ function buildModel(movs,mkt,method,nowT){
       const a=toARS(m),u=toUSD(m);
       if(m.amt>=0){p.gIncA+=a;p.gIncU+=u}else{p.taxA+=a;p.taxU+=u}
       p.flows.push({t:m.t,a,u});
+      incomes.push({t:m.t,tk:m.tk,kind:m.inc||'Dividendo',amt:m.amt,cur:m.cur,a,u});
       if(m.cur==='USD'||hasFx)(p.pays||(p.pays=[])).push({t:m.t,u,q:m.amt>=0?p.qty:0});
       events.push({t:m.t,tk:m.tk,dq:0,cA:a,cU:u});
     }
@@ -481,7 +482,7 @@ function buildModel(movs,mkt,method,nowT){
   for(const w of withdrawals){const r=mrow(mk(w.t));r.wd+=w.ars;r.wdU+=w.usd}
   for(const t of trades){const r=mrow(mk(t.t));if(t.side==='COMPRA'){r.buy+=t.amtA;r.buyU+=t.amtU}else if(t.side==='VENTA'){r.sell+=t.amtA;r.sellU+=t.amtU}}
   for(const e of events)if(e.dq===0){const r=mrow(mk(e.t));r.inc+=e.cA;r.incU+=e.cU}
-  return {lastMovT:sorted.length?sorted[sorted.length-1].t:nowT,splits,fxAt,fxNow,hasFx,nowT,firstT,P,list,sales,trades,deposits,withdrawals,warns,unclassified,caucionARS,cashARS,cashUSD,
+  return {incomes,events,lastMovT:sorted.length?sorted[sorted.length-1].t:nowT,splits,fxAt,fxNow,hasFx,nowT,firstT,P,list,sales,trades,deposits,withdrawals,warns,unclassified,caucionARS,cashARS,cashUSD,
     tot:{mvA,mvU,costA,costU,realA,realU,incA,incU,unrA,unrU,depA,depU,wdA,wdU,acctA,acctU,totA,totU,secA,secU,irrA,irrU,staleCount},
     timeline,periods,monthly:Object.values(monthly).sort((a,b)=>a.k<b.k?-1:1),priceAt};
 }
@@ -680,7 +681,7 @@ function donutSvg(items,centerBig,centerSmall){
 }
 
 /* ============ estado y datos de ejemplo ============ */
-const state={tab:'resumen',cur:'ARS',method:'avg',raw:{},mkt:{fx:[],spy:[],ipc:[],prices:{},hist:{},fxManual:0,sectors:{},bonds:{}},meta:null,demo:false,per:'month',sort:{k:'vA',d:-1},showClosed:false,assumeOne:false,open:null,fTk:'',fSide:'',loaded:false};
+const state={tab:'resumen',cur:'ARS',method:'avg',raw:{},mkt:{fx:[],spy:[],ipc:[],prices:{},hist:{},fxManual:0,sectors:{},bonds:{}},meta:null,demo:false,per:'month',sort:{k:'vA',d:-1},showClosed:false,assumeOne:false,taxYear:0,open:null,fTk:'',fSide:'',loaded:false};
 try{const p=JSON.parse(localStorage.getItem(LS+'ui')||'{}');if(p.cur)state.cur=p.cur;if(p.tab)state.tab=p.tab;if(p.method)state.method=p.method}catch(e){}
 const saveUi=()=>{try{localStorage.setItem(LS+'ui',JSON.stringify({cur:state.cur,tab:state.tab,method:state.method}))}catch(e){}};
 function demoData(){
@@ -737,7 +738,7 @@ const ingest={
 
 /* ============ render ============ */
 let M=null,B=null,mktUse=null;
-const TABS=[['resumen','Resumen'],['posiciones','Posiciones'],['rendimiento','Rendimiento'],['operaciones','Operaciones'],['flujos','Flujos'],['proyeccion','Proyección'],['benchmarks','Benchmarks'],['datos','Datos']];
+const TABS=[['resumen','Resumen'],['posiciones','Posiciones'],['rendimiento','Rendimiento'],['operaciones','Operaciones'],['flujos','Flujos'],['proyeccion','Proyección'],['impuestos','Impuestos'],['benchmarks','Benchmarks'],['datos','Datos']];
 const isU=()=>state.cur==='USD';
 const V=(a,u)=>isU()?u:a;
 const mny=(v,o)=>money(v,state.cur,o);
@@ -777,7 +778,7 @@ function render(){
   $('#meta').textContent=M?`${rawList().length||state.demoRows?.length||0} movimientos · hasta ${dlab(M.nowT)}${state.auto&&state.auto.updated?' · mercado al '+state.auto.updated.slice(0,10):''}`:'';
   if(!M){v.innerHTML=state.tab==='datos'?viewDatos():viewEmpty();}
   else{
-    const fn={resumen:viewResumen,posiciones:viewPos,rendimiento:viewRend,operaciones:viewOps,flujos:viewFlujos,proyeccion:viewProy,benchmarks:viewBench,datos:viewDatos}[state.tab];
+    const fn={resumen:viewResumen,posiciones:viewPos,rendimiento:viewRend,operaciones:viewOps,flujos:viewFlujos,proyeccion:viewProy,impuestos:viewImp,benchmarks:viewBench,datos:viewDatos}[state.tab];
     v.innerHTML=(state.demo?`<div class="banner"><span><b>Datos de ejemplo.</b> Activos y montos inventados para mostrar cómo se ve el tablero.</span><button class="btn sm" data-act="exitdemo">Salir del ejemplo</button></div>`:'')+fn();
   }
   charts.forEach(f=>f());
@@ -972,6 +973,56 @@ function viewProy(){
   ${R.skipped.length?`<p class="mut" style="font-size:12.5px;margin-top:10px">Sin proyección por tener un solo cobro: ${R.skipped.join(', ')}. <label class="row2" style="display:inline-flex"><input type="checkbox" data-act="assume" ${state.assumeOne?'checked':''}> Incluirlos suponiendo pago trimestral</label></p>`:''}
   </section>`;
 }
+function csvText(head,rows){
+  const f=v=>typeof v==='number'?String(Math.round(v*100)/100).replace('.',','):String(v??'').replace(/;/g,',');
+  return '\ufeff'+[head,...rows].map(r=>r.map(f).join(';')).join('\r\n');
+}
+function taxData(){
+  const years=[...new Set([...M.sales.map(s=>+dstr(s.t).slice(0,4)),...M.incomes.map(i=>+dstr(i.t).slice(0,4)),+dstr(M.nowT).slice(0,4)])].sort();
+  const y=years.includes(state.taxYear)?state.taxYear:years[years.length-1];
+  const inY=t=>+dstr(t).slice(0,4)===y;
+  const sales=M.sales.filter(s=>inY(s.t)).sort((a,b)=>a.t-b.t||a.tk.localeCompare(b.tk));
+  const byTk={};
+  for(const i of M.incomes.filter(i=>inY(i.t)&&i.kind!=='Amortización')){
+    const k=i.tk+'|'+i.kind;const o=byTk[k]||(byTk[k]={tk:i.tk,kind:i.kind,gA:0,gU:0,tA:0,tU:0,n:0});
+    if(i.amt>=0){o.gA+=i.a;o.gU+=i.u;o.n++}else{o.tA+=i.a;o.tU+=i.u}
+  }
+  const inc=Object.values(byTk).sort((a,b)=>a.kind.localeCompare(b.kind)||a.tk.localeCompare(b.tk));
+  const tc=Math.min(Math.round(Date.UTC(y,11,31)/DAY),M.nowT);
+  const q={};for(const e of M.events)if(e.t<=tc)q[e.tk]=(q[e.tk]||0)+e.dq;
+  const fx=tc>=M.nowT?M.fxNow:M.fxAt(tc);
+  const hold=Object.keys(q).filter(tk=>q[tk]>1e-9).map(tk=>{const px=M.priceAt(tk,tc),vA=q[tk]*px;return {tk,tipo:M.P[tk].tipo,q:q[tk],px,vA,vU:vA/fx}}).sort((a,b)=>b.vA-a.vA);
+  return {years,y,sales,inc,hold,tc,fx};
+}
+function viewImp(){
+  const D=taxData(),{y}=D;
+  const sum=(a,f)=>a.reduce((s,x)=>s+f(x),0);
+  const dv=D.inc.filter(x=>x.kind==='Dividendo'),rn=D.inc.filter(x=>x.kind==='Renta');
+  const rA=sum(D.sales,s=>s.rA),rU=sum(D.sales,s=>s.rU);
+  const gain=D.sales.filter(s=>s.rA>0),loss=D.sales.filter(s=>s.rA<0);
+  const nA=money,A=v=>money(v,'ARS',{sign:true}),U=v=>money(v,'USD',{sign:true});
+  const yr=D.years.map(v=>`<option value="${v}"${v===y?' selected':''}>${v}</option>`).join('');
+  const hv=sum(D.hold,h=>h.vA),hvU=sum(D.hold,h=>h.vU);
+  return `<div class="sec-h"><div><h2 style="font:700 20px var(--f-display);margin:0">Resumen para impuestos</h2><p class="mut" style="margin:2px 0 0">Datos de tu operatoria por año calendario, en pesos y en dólares de cada fecha. Sirve de insumo: revisá el tratamiento fiscal que corresponda.</p></div>
+    <div class="flt"><label for="selYear" class="mut">Año</label><select id="selYear" data-act="year" class="in" style="min-width:90px">${yr}</select></div></div>
+  <section class="cmp"><div><div class="lbl">Dividendos brutos</div><div class="v">${money(sum(dv,x=>x.gA),'ARS',{compact:true})}</div><div class="mut num" style="font-size:12.5px">${money(sum(dv,x=>x.gU),'USD')}</div></div>
+    <div><div class="lbl">Rentas de ONs brutas</div><div class="v">${money(sum(rn,x=>x.gA),'ARS',{compact:true})}</div><div class="mut num" style="font-size:12.5px">${money(sum(rn,x=>x.gU),'USD')}</div></div>
+    <div><div class="lbl">Retenciones y gastos</div><div class="v neg">${money(sum(D.inc,x=>x.tA),'ARS',{compact:true})}</div><div class="mut num" style="font-size:12.5px">${money(sum(D.inc,x=>x.tU),'USD')}</div></div>
+    <div><div class="lbl">Resultado de ventas</div><div class="v ${cls(rA)}">${money(rA,'ARS',{sign:true,compact:true})}</div><div class="mut num" style="font-size:12.5px">${U(rU)}</div></div>
+    <div><div class="lbl">Ganancias / pérdidas</div><div class="v" style="font-size:15px"><span class="pos">${A(sum(gain,s=>s.rA))}</span><br><span class="neg">${A(sum(loss,s=>s.rA))}</span></div></div>
+    <div><div class="lbl">Tenencia al ${dlab(D.tc)}</div><div class="v">${money(hv,'ARS',{compact:true})}</div><div class="mut num" style="font-size:12.5px">${money(hvU,'USD')}</div></div></section>
+  <section><div class="sec-h"><h2 style="font:600 15px var(--f-body);margin:0 0 8px">Ventas y resultado realizado</h2><button class="btn sm" data-act="csv" data-v="sales">Descargar CSV</button></div>
+  <div class="tw" style="max-height:420px"><table><thead><tr><th>Fecha</th><th>Activo</th><th>Cantidad</th><th>Venta $</th><th>Costo $</th><th>Resultado $</th><th>Resultado US$</th></tr></thead><tbody>${D.sales.length?D.sales.map(s=>`<tr><td>${dlab(s.t)}</td><td class="tk">${s.tk}</td><td class="num">${nfQ.format(s.qty)}</td><td class="num">${money(s.procA,'ARS')}</td><td class="num">${money(s.costA,'ARS')}</td><td class="num ${cls(s.rA)}">${A(s.rA)}</td><td class="num ${cls(s.rU)}">${U(s.rU)}</td></tr>`).join(''):'<tr><td colspan="7" class="mut">Sin ventas en este año.</td></tr>'}</tbody>
+  ${D.sales.length?`<tfoot><tr><td class="tk">Total</td><td></td><td></td><td class="num"><b>${money(sum(D.sales,s=>s.procA),'ARS')}</b></td><td class="num"><b>${money(sum(D.sales,s=>s.costA),'ARS')}</b></td><td class="num ${cls(rA)}"><b>${A(rA)}</b></td><td class="num ${cls(rU)}"><b>${U(rU)}</b></td></tr></tfoot>`:''}</table></div>
+  <p class="mut" style="font-size:12.5px;margin:6px 0 0">Costo según ${state.method==='avg'?'costo promedio':'FIFO'}, el método elegido arriba. En pesos, el costo es el nominal de cada compra, sin ajuste por inflación.</p></section>
+  <section><div class="sec-h"><h2 style="font:600 15px var(--f-body);margin:0 0 8px">Dividendos y rentas por activo</h2><button class="btn sm" data-act="csv" data-v="income">Descargar CSV</button></div>
+  <div class="tw" style="max-height:420px"><table><thead><tr><th>Activo</th><th>Concepto</th><th>Cobros</th><th>Bruto US$</th><th>Bruto $</th><th>Retención $</th><th>Neto $</th></tr></thead><tbody>${D.inc.length?D.inc.map(x=>`<tr><td class="tk">${x.tk}</td><td>${x.kind}</td><td class="num">${x.n}</td><td class="num">${money(x.gU,'USD')}</td><td class="num">${money(x.gA,'ARS')}</td><td class="num neg">${money(x.tA,'ARS')}</td><td class="num">${money(x.gA+x.tA,'ARS')}</td></tr>`).join(''):'<tr><td colspan="7" class="mut">Sin cobros en este año.</td></tr>'}</tbody></table></div>
+  <p class="mut" style="font-size:12.5px;margin:6px 0 0">Los dividendos en dólares se convierten al CCL de cada fecha de cobro. La retención es la línea en pesos que figura junto a cada cobro en el extracto del broker.</p></section>
+  <section><div class="sec-h"><h2 style="font:600 15px var(--f-body);margin:0 0 8px">Tenencia al ${dlab(D.tc)}</h2><button class="btn sm" data-act="csv" data-v="hold">Descargar CSV</button></div>
+  <div class="tw" style="max-height:420px"><table><thead><tr><th>Activo</th><th>Tipo</th><th>Cantidad</th><th>Precio $</th><th>Valor $</th><th>Valor US$</th></tr></thead><tbody>${D.hold.map(h=>`<tr><td class="tk">${h.tk}</td><td>${esc((h.tipo||'').replace('Corporativos','ON'))}</td><td class="num">${nfQ.format(h.q)}</td><td class="num">${nfP.format(h.px)}</td><td class="num">${money(h.vA,'ARS')}</td><td class="num">${money(h.vU,'USD')}</td></tr>`).join('')}</tbody>
+  <tfoot><tr><td class="tk">Total</td><td></td><td></td><td></td><td class="num"><b>${money(hv,'ARS')}</b></td><td class="num"><b>${money(hvU,'USD')}</b></td></tr></tfoot></table></div>
+  <p class="mut" style="font-size:12.5px;margin:6px 0 0">Valuada al último precio conocido hasta esa fecha (tus operaciones y las cotizaciones cargadas), convertida al CCL de ${y===+dstr(M.nowT).slice(0,4)?'hoy':'esa fecha'}. Para una valuación oficial al cierre, verificá con la cotización de esa fecha.</p></section>`;
+}
 function viewBench(){
   const c=state.cur,T=M.tot;
   const items=[['cartera','Tu cartera','var(--s1)'],['spy','SPY (en USD)','var(--s2)'],['usd','Dólar CCL (guardado)','var(--s3)'],['ipc','Inflación (poder de compra)','var(--s4)']];
@@ -1083,6 +1134,11 @@ document.addEventListener('click',async ev=>{
   else if(a==='fxman'){const n=num($('#fxManual').value);state.mkt.fxManual=n>0?n:0;await persistMkt();recompute();render();toast(n>0?'Dólar guardado':'Dólar manual quitado')}
   else if(a==='savepx'){let n=0;document.querySelectorAll('[data-px]').forEach(i=>{const p=num(i.value);if(p>0){state.mkt.prices[i.dataset.px]=p;n++}});if(n){await persistMkt();recompute();render();toast(n+' precios guardados')}else toast('No escribiste ningún precio')}
   else if(a==='savesec'){let n=0;state.mkt.sectors=state.mkt.sectors||{};document.querySelectorAll('[data-ss]').forEach(i=>{const v=i.value.trim();if(v){const tk=i.dataset.ss;state.mkt.sectors[tk]=[document.querySelector('[data-sc="'+tk+'"]').value,v];n++}});if(n){await persistMkt();recompute();render();toast(n+' activos clasificados')}else toast('Escribí al menos un sector')}
+  else if(a==='csv'){const D=taxData();let h,r,n;
+    if(v==='sales'){n='ventas';h=['Fecha','Activo','Cantidad','Venta ARS','Costo ARS','Resultado ARS','Venta USD','Costo USD','Resultado USD'];r=D.sales.map(s=>[dstr(s.t),s.tk,s.qty,s.procA,s.costA,s.rA,s.procU,s.costU,s.rU])}
+    else if(v==='income'){n='dividendos-rentas';h=['Activo','Concepto','Cobros','Bruto USD','Bruto ARS','Retencion ARS','Neto ARS'];r=D.inc.map(x=>[x.tk,x.kind,x.n,x.gU,x.gA,x.tA,x.gA+x.tA])}
+    else{n='tenencia';h=['Activo','Tipo','Cantidad','Precio ARS','Valor ARS','Valor USD'];r=D.hold.map(x=>[x.tk,x.tipo||'',x.q,x.px,x.vA,x.vU])}
+    await download(`cartera-${n}-${D.y}.csv`,csvText(h,r),'text/csv')}
   else if(a==='assume'){state.assumeOne=el.checked;render()}
   else if(a==='savebonds'){state.mkt.bonds=state.mkt.bonds||{};document.querySelectorAll('[data-bv]').forEach(i=>{const tk=i.dataset.bv,txt=document.querySelector('[data-ba="'+tk+'"]').value,fq=+document.querySelector('[data-bf="'+tk+'"]').value||0;const am=txt.split(',').map(x=>x.trim()).filter(Boolean).map(x=>{const [d,pc]=x.split(':');return [d.trim(),num(pc)]}).filter(x=>parseDate(x[0])!=null&&x[1]>0);
       if(i.value||am.length||fq)state.mkt.bonds[tk]={venc:i.value||'',amort:am,freq:fq};else delete state.mkt.bonds[tk]});await persistMkt();render();toast('ONs guardadas')}
@@ -1098,6 +1154,7 @@ document.addEventListener('change',ev=>{
   else if(t.dataset.ingest&&t.files[0]){const k=t.dataset.ingest,f=t.files[0];const rd=new FileReader();
     if(/\.xlsx$/i.test(f.name)){rd.onload=()=>{const wb=XLSX.read(rd.result,{type:'array'});ingestText(k,XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]))};rd.readAsArrayBuffer(f)}
     else{rd.onload=()=>{if(!rd.result){toast('El archivo '+f.name+' llegó vacío');return}toast('Leyendo '+f.name+' ('+nfARS.format(rd.result.length)+' caracteres)…');ingestText(k,rd.result)};rd.onerror=()=>toast('No pude leer el archivo.');rd.readAsText(f)}t.value=''}
+  else if(t.id==='selYear'){state.taxYear=+t.value;render()}
   else if(t.id==='fSide'){state.fSide=t.value;render();const e=$('#fSide');e&&e.focus()}
 });
 document.addEventListener('input',ev=>{if(ev.target.id==='fTk'){state.fTk=ev.target.value;clearTimeout(input.h);input.h=setTimeout(()=>{render();const e=$('#fTk');if(e){e.focus();e.setSelectionRange(e.value.length,e.value.length)}},180)}});
