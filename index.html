@@ -110,6 +110,15 @@ tbody tr:last-child td{border-bottom:0}
 tbody tr.row:hover td{background:var(--surface-2)}
 tr.det td{background:var(--surface-2);padding:10px 16px;white-space:normal;text-align:left}
 td.tk{font-weight:600}
+.ngrida{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px;margin-top:14px}
+.ncard{border:1px solid var(--line);background:var(--surface);border-radius:12px;padding:14px 16px}
+.ncard header{display:flex;align-items:baseline;gap:10px;margin-bottom:8px;flex-wrap:wrap}
+.ncard .tk{font:700 16px var(--f-display)}
+.ncard .nst[hidden]{display:none}.ncard .nst{margin-left:auto}.ncard .nst.pos{background:color-mix(in srgb,var(--pos) 16%,transparent);color:var(--pos)}.ncard .nst.neg{background:color-mix(in srgb,var(--neg) 16%,transparent);color:var(--neg)}
+.nl{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--ink-3);margin-top:8px}
+.nl textarea{border:1px solid var(--line-2);border-radius:8px;background:var(--bg);padding:8px 10px;resize:vertical;font:13.5px/1.45 var(--f-body);color:var(--ink)}
+.ngrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.ngrid .in{width:100%}
+@media(max-width:480px){.ngrid{grid-template-columns:1fr}}
 .badge{display:inline-block;border-radius:5px;padding:1px 7px;font-size:11.5px;font-weight:500;background:var(--surface-2);color:var(--ink-2)}
 .badge.buy{background:var(--accent-soft);color:var(--accent)} .badge.sell{background:var(--warn-soft);color:var(--warn)}
 .w{display:inline-block;width:56px;height:6px;background:var(--surface-2);border-radius:3px;vertical-align:middle;margin-right:8px;position:relative}
@@ -681,7 +690,7 @@ function donutSvg(items,centerBig,centerSmall){
 }
 
 /* ============ estado y datos de ejemplo ============ */
-const state={tab:'resumen',cur:'ARS',method:'avg',raw:{},mkt:{fx:[],spy:[],ipc:[],prices:{},hist:{},fxManual:0,sectors:{},bonds:{}},meta:null,demo:false,per:'month',sort:{k:'vA',d:-1},showClosed:false,assumeOne:false,taxYear:0,open:null,fTk:'',fSide:'',loaded:false};
+const state={tab:'resumen',cur:'ARS',method:'avg',raw:{},mkt:{fx:[],spy:[],ipc:[],prices:{},hist:{},fxManual:0,sectors:{},bonds:{},notes:{}},meta:null,demo:false,per:'month',sort:{k:'vA',d:-1},showClosed:false,assumeOne:false,taxYear:0,open:null,fTk:'',fSide:'',loaded:false};
 try{const p=JSON.parse(localStorage.getItem(LS+'ui')||'{}');if(p.cur)state.cur=p.cur;if(p.tab)state.tab=p.tab;if(p.method)state.method=p.method}catch(e){}
 const saveUi=()=>{try{localStorage.setItem(LS+'ui',JSON.stringify({cur:state.cur,tab:state.tab,method:state.method}))}catch(e){}};
 function demoData(){
@@ -738,7 +747,7 @@ const ingest={
 
 /* ============ render ============ */
 let M=null,B=null,mktUse=null;
-const TABS=[['resumen','Resumen'],['posiciones','Posiciones'],['rendimiento','Rendimiento'],['operaciones','Operaciones'],['flujos','Flujos'],['proyeccion','Proyección'],['impuestos','Impuestos'],['benchmarks','Benchmarks'],['datos','Datos']];
+const TABS=[['resumen','Resumen'],['posiciones','Posiciones'],['rendimiento','Rendimiento'],['operaciones','Operaciones'],['flujos','Flujos'],['proyeccion','Proyección'],['impuestos','Impuestos'],['notas','Notas'],['benchmarks','Benchmarks'],['datos','Datos']];
 const isU=()=>state.cur==='USD';
 const V=(a,u)=>isU()?u:a;
 const mny=(v,o)=>money(v,state.cur,o);
@@ -756,7 +765,7 @@ async function loadAuto(){
 }
 function effMkt(){
   const m=state.mkt,a=state.auto||{};
-  return {fx:m.fx.length?m.fx:(a.fx||[]),spy:m.spy.length?m.spy:(a.spy||[]),ipc:m.ipc.length?m.ipc:(a.ipc||[]),prices:{...(a.prices||{}),...m.prices},hist:m.hist,fxManual:m.fxManual,sectors:m.sectors,bonds:m.bonds};
+  return {fx:m.fx.length?m.fx:(a.fx||[]),spy:m.spy.length?m.spy:(a.spy||[]),ipc:m.ipc.length?m.ipc:(a.ipc||[]),prices:{...(a.prices||{}),...m.prices},hist:m.hist,fxManual:m.fxManual,sectors:m.sectors,bonds:m.bonds,notes:m.notes};
 }
 function recompute(){
   const raws=state.demo?state.demoRows:rawList();
@@ -778,7 +787,7 @@ function render(){
   $('#meta').textContent=M?`${rawList().length||state.demoRows?.length||0} movimientos · hasta ${dlab(M.nowT)}${state.auto&&state.auto.updated?' · mercado al '+state.auto.updated.slice(0,10):''}`:'';
   if(!M){v.innerHTML=state.tab==='datos'?viewDatos():viewEmpty();}
   else{
-    const fn={resumen:viewResumen,posiciones:viewPos,rendimiento:viewRend,operaciones:viewOps,flujos:viewFlujos,proyeccion:viewProy,impuestos:viewImp,benchmarks:viewBench,datos:viewDatos}[state.tab];
+    const fn={resumen:viewResumen,posiciones:viewPos,rendimiento:viewRend,operaciones:viewOps,flujos:viewFlujos,proyeccion:viewProy,impuestos:viewImp,notas:viewNotas,benchmarks:viewBench,datos:viewDatos}[state.tab];
     v.innerHTML=(state.demo?`<div class="banner"><span><b>Datos de ejemplo.</b> Activos y montos inventados para mostrar cómo se ve el tablero.</span><button class="btn sm" data-act="exitdemo">Salir del ejemplo</button></div>`:'')+fn();
   }
   charts.forEach(f=>f());
@@ -885,7 +894,7 @@ function viewPos(){
   const body=L.map(p=>{
     const un=V(p.unA,p.unU),irr=V(p.irrA,p.irrU);
     const open=state.open===p.tk;
-    let r=`<tr class="row" data-act="open" data-v="${p.tk}" style="cursor:pointer"><td class="tk">${p.tk}${p.qty>0&&!p.hasCur&&anyCur?' <span class="badge" title="Valuado al último precio operado">últ. op.</span>':''}</td><td>${esc((p.tipo||'').replace('Corporativos','ON'))}</td><td class="num">${p.qty>0?nfQ.format(p.qty):'—'}</td><td class="num">${p.qty>0?mny(V(p.avgA,p.avgU)):'—'}</td><td class="num">${p.qty>0?(isU()?money(p.px/M.fxNow,'USD'):nfP.format(p.px).replace(/^/,'$ ')):'—'}</td><td class="num">${p.qty>0?mny(V(p.cA,p.cU)):'—'}</td><td class="num">${p.qty>0?mny(V(p.vA,p.vU)):'—'}</td><td class="num"><span class="w"><b style="width:${p.qty>0?Math.min(100,p.vA/tv*100*3):0}%"></b></span>${p.qty>0?pct(p.vA/tv):'—'}</td><td class="num ${cls(un)}">${p.qty>0?mny(un,{sign:true}):'—'}</td><td class="num ${cls(un)}">${p.qty>0&&p.cA>0?pct(V(p.unA,p.unU)/V(p.cA,p.cU),{sign:true}):'—'}</td><td class="num ${cls(V(p.realA,p.realU))}">${p.sellA?mny(V(p.realA,p.realU),{sign:true}):'—'}</td><td class="num ${cls(V(p.incNA,p.incNU))}">${p.gIncA?mny(V(p.incNA,p.incNU),{sign:true}):'—'}</td><td class="num ${cls(V(p.totA,p.totU))}"><b>${mny(V(p.totA,p.totU),{sign:true})}</b></td><td class="num ${cls(irr)}">${irr==null?'—':(Math.abs(irr)>10?'n/c':pct(irr,{sign:true}))}</td></tr>`;
+    let r=`<tr class="row" data-act="open" data-v="${p.tk}" style="cursor:pointer"><td class="tk">${p.tk}${(state.mkt.notes||{})[p.tk]?' <span class="badge" title="Tiene nota">nota</span>':''}${p.qty>0&&!p.hasCur&&anyCur?' <span class="badge" title="Valuado al último precio operado">últ. op.</span>':''}</td><td>${esc((p.tipo||'').replace('Corporativos','ON'))}</td><td class="num">${p.qty>0?nfQ.format(p.qty):'—'}</td><td class="num">${p.qty>0?mny(V(p.avgA,p.avgU)):'—'}</td><td class="num">${p.qty>0?(isU()?money(p.px/M.fxNow,'USD'):nfP.format(p.px).replace(/^/,'$ ')):'—'}</td><td class="num">${p.qty>0?mny(V(p.cA,p.cU)):'—'}</td><td class="num">${p.qty>0?mny(V(p.vA,p.vU)):'—'}</td><td class="num"><span class="w"><b style="width:${p.qty>0?Math.min(100,p.vA/tv*100*3):0}%"></b></span>${p.qty>0?pct(p.vA/tv):'—'}</td><td class="num ${cls(un)}">${p.qty>0?mny(un,{sign:true}):'—'}</td><td class="num ${cls(un)}">${p.qty>0&&p.cA>0?pct(V(p.unA,p.unU)/V(p.cA,p.cU),{sign:true}):'—'}</td><td class="num ${cls(V(p.realA,p.realU))}">${p.sellA?mny(V(p.realA,p.realU),{sign:true}):'—'}</td><td class="num ${cls(V(p.incNA,p.incNU))}">${p.gIncA?mny(V(p.incNA,p.incNU),{sign:true}):'—'}</td><td class="num ${cls(V(p.totA,p.totU))}"><b>${mny(V(p.totA,p.totU),{sign:true})}</b></td><td class="num ${cls(irr)}">${irr==null?'—':(Math.abs(irr)>10?'n/c':pct(irr,{sign:true}))}</td></tr>`;
     if(open){
       const tr=M.trades.filter(t=>t.tk===p.tk).sort((a,b)=>b.t-a.t);
       r+=`<tr class="det"><td colspan="14"><b>${p.tk}</b> · ${tr.length} operaciones<div class="tw" style="margin-top:8px"><table><thead><tr><th>Fecha</th><th>Operación</th><th>Cantidad</th><th>Precio</th><th>Importe</th><th>Resultado</th></tr></thead><tbody>${tr.map(t=>`<tr><td>${dlab(t.t)}</td><td><span class="badge ${t.side==='COMPRA'?'buy':t.side==='VENTA'?'sell':''}">${t.side.toLowerCase()}</span></td><td class="num">${nfQ.format(t.qty)}</td><td class="num">${t.price?nfP.format(t.price):'—'}</td><td class="num">${mny(V(t.amtA,t.amtU))}</td><td class="num ${cls(t.rA)}">${t.side==='VENTA'?mny(V(t.rA,t.rU),{sign:true}):'—'}</td></tr>`).join('')}</tbody></table></div></td></tr>`;
@@ -972,6 +981,40 @@ function viewProy(){
   <div class="tw" style="max-height:520px"><table><thead><tr><th>Fecha</th><th>Activo</th><th>Concepto</th><th>Monto (${cc})</th><th>Base</th></tr></thead><tbody>${R.ev.slice(0,80).map(e=>`<tr><td>${dlab(e.t)}${e.pending?' <span class="badge" title="Posterior a tu último movimiento cargado">por confirmar</span>':''}</td><td class="tk">${e.tk}</td><td>${kindBadge(e.kind)}${e.kind==='Dividendo'?` <span class="badge">${e.ann?'anunciado':'estimado'}</span>`:''}</td><td class="num">${money(cv(e.u),cc)}</td><td class="mut">${e.n} cobro${e.n>1?'s':''} previos</td></tr>`).join('')}</tbody></table></div>
   ${R.skipped.length?`<p class="mut" style="font-size:12.5px;margin-top:10px">Sin proyección por tener un solo cobro: ${R.skipped.join(', ')}. <label class="row2" style="display:inline-flex"><input type="checkbox" data-act="assume" ${state.assumeOne?'checked':''}> Incluirlos suponiendo pago trimestral</label></p>`:''}
   </section>`;
+}
+function noteStatus(n,px){
+  const t=+n.target,st=+n.stop;
+  if(px&&t>0&&px>=t)return {k:'tgt',txt:'Objetivo alcanzado',cl:'pos'};
+  if(px&&st>0&&px<=st)return {k:'stp',txt:'Stop tocado',cl:'neg'};
+  return null;
+}
+function noteMeta(n,p){
+  const t=+n.target,st=+n.stop,px=p&&p.px,out=[];
+  if(px&&t>0)out.push(`Objetivo ${pct(t/px-1)} desde el precio actual`);
+  if(px&&st>0)out.push(`Stop ${pct(st/px-1)}`);
+  if(p&&p.avgA&&px&&p.qty>0)out.push(`Hoy ${pct(px/p.avgA-1)} vs. tu costo`);
+  return out.join(' · ');
+}
+function viewNotas(){
+  const N=state.mkt.notes||{},byTk={};M.list.forEach(p=>byTk[p.tk]=p);
+  const held=M.list.filter(p=>p.qty>0).sort((a,b)=>b.vA-a.vA).map(p=>p.tk);
+  const extra=Object.keys(N).filter(tk=>!held.includes(tk)).sort();
+  const tks=[...held,...extra];
+  const alerts=tks.map(tk=>({tk,st:N[tk]&&noteStatus(N[tk],byTk[tk]&&byTk[tk].px)})).filter(x=>x.st);
+  const rv=Date.now(),due=tks.filter(tk=>N[tk]&&N[tk].review&&N[tk].review<=dstr(Math.floor(rv/DAY)));
+  const card=tk=>{
+    const p=byTk[tk],n=N[tk]||{},st=n&&noteStatus(n,p&&p.px);
+    return `<article class="ncard" data-nc="${tk}"><header><span class="tk">${tk}</span>${p&&p.qty>0?`<span class="mut">${nfQ.format(p.qty)} · ${mny(V(p.vA,p.vU))}</span>`:'<span class="mut">sin posición</span>'}<span class="badge nst ${st?st.cl:''}" ${st?'':'hidden'}>${st?st.txt:''}</span></header>
+    <label class="nl">Por qué lo tengo / tesis<textarea rows="3" data-nf="${tk}" data-f="why" placeholder="Qué esperás de este activo, qué te hizo comprarlo, qué invalidaría la idea…">${esc(n.why||'')}</textarea></label>
+    <div class="ngrid"><label class="nl">Precio objetivo (ARS)<input class="in" type="number" step="any" inputmode="decimal" data-nf="${tk}" data-f="target" value="${n.target||''}"></label>
+    <label class="nl">Stop / alerta (ARS)<input class="in" type="number" step="any" inputmode="decimal" data-nf="${tk}" data-f="stop" value="${n.stop||''}"></label>
+    <label class="nl">Revisar el<input class="in" type="date" data-nf="${tk}" data-f="review" value="${esc(n.review||'')}"></label></div>
+    <p class="mut nmeta" style="font-size:12.5px;margin:6px 0 0">${noteMeta(n,p)||'Precio actual: '+(p&&p.px?nfP.format(p.px):'—')}</p></article>`;
+  };
+  const al=alerts.length||due.length?`<div class="banner"><span>${alerts.map(a=>`<b>${a.tk}</b>: ${a.st.txt.toLowerCase()}`).join(' · ')}${alerts.length&&due.length?' · ':''}${due.length?`Para revisar: ${due.map(t=>'<b>'+t+'</b>').join(', ')}`:''}</span></div>`:'';
+  const add=`<div class="row2" style="margin-top:12px"><input class="in" id="ntNew" placeholder="Agregar nota a otro activo (ej. KO)" style="max-width:260px" aria-label="Activo"><button class="btn sm" data-act="ntadd">Agregar</button></div>`;
+  return `<div class="sec-h"><div><h2 style="font:700 20px var(--f-display);margin:0">Notas por activo</h2><p class="mut" style="margin:2px 0 0">Tu tesis, objetivo y stop de cada posición. Se guardan solas al salir de cada campo y avisan cuando el precio llega al objetivo o al stop.</p></div></div>${al}
+  <div class="ngrida">${tks.map(card).join('')||'<p class="mut">Sin posiciones todavía.</p>'}</div>${add}`;
 }
 function csvText(head,rows){
   const f=v=>typeof v==='number'?String(Math.round(v*100)/100).replace('.',','):String(v??'').replace(/;/g,',');
@@ -1077,8 +1120,8 @@ function viewDatos(){
 }
 
 /* ============ acciones ============ */
-async function persistMkt(){await store.save('mkt','mkt',{fx:state.mkt.fx,spy:state.mkt.spy,ipc:state.mkt.ipc,prices:state.mkt.prices,hist:state.mkt.hist,fxManual:state.mkt.fxManual,sectors:state.mkt.sectors||{},bonds:state.mkt.bonds||{}})}
-function mergeMkt(x){ if(!x)return; x=JSON.parse(JSON.stringify(x)); for(const k of ['fx','spy','ipc'])state.mkt[k]=x[k]||[]; state.mkt.prices=x.prices||{};state.mkt.hist=x.hist||{};state.mkt.fxManual=+x.fxManual||0;state.mkt.sectors=x.sectors||{};state.mkt.bonds=x.bonds||{} }
+async function persistMkt(){await store.save('mkt','mkt',{fx:state.mkt.fx,spy:state.mkt.spy,ipc:state.mkt.ipc,prices:state.mkt.prices,hist:state.mkt.hist,fxManual:state.mkt.fxManual,sectors:state.mkt.sectors||{},bonds:state.mkt.bonds||{},notes:state.mkt.notes||{}})}
+function mergeMkt(x){ if(!x)return; x=JSON.parse(JSON.stringify(x)); for(const k of ['fx','spy','ipc'])state.mkt[k]=x[k]||[]; state.mkt.prices=x.prices||{};state.mkt.hist=x.hist||{};state.mkt.fxManual=+x.fxManual||0;state.mkt.sectors=x.sectors||{};state.mkt.bonds=x.bonds||{};state.mkt.notes=x.notes||{} }
 async function importExcel(file){
   try{
     const buf=await file.arrayBuffer();
@@ -1139,21 +1182,29 @@ document.addEventListener('click',async ev=>{
     else if(v==='income'){n='dividendos-rentas';h=['Activo','Concepto','Cobros','Bruto USD','Bruto ARS','Retencion ARS','Neto ARS'];r=D.inc.map(x=>[x.tk,x.kind,x.n,x.gU,x.gA,x.tA,x.gA+x.tA])}
     else{n='tenencia';h=['Activo','Tipo','Cantidad','Precio ARS','Valor ARS','Valor USD'];r=D.hold.map(x=>[x.tk,x.tipo||'',x.q,x.px,x.vA,x.vU])}
     await download(`cartera-${n}-${D.y}.csv`,csvText(h,r),'text/csv')}
+  else if(a==='ntadd'){const tk=normTk($('#ntNew').value);if(!tk){toast('Escribí el ticker');return}state.mkt.notes=state.mkt.notes||{};state.mkt.notes[tk]=state.mkt.notes[tk]||{why:''};await persistMkt();render()}
   else if(a==='assume'){state.assumeOne=el.checked;render()}
   else if(a==='savebonds'){state.mkt.bonds=state.mkt.bonds||{};document.querySelectorAll('[data-bv]').forEach(i=>{const tk=i.dataset.bv,txt=document.querySelector('[data-ba="'+tk+'"]').value,fq=+document.querySelector('[data-bf="'+tk+'"]').value||0;const am=txt.split(',').map(x=>x.trim()).filter(Boolean).map(x=>{const [d,pc]=x.split(':');return [d.trim(),num(pc)]}).filter(x=>parseDate(x[0])!=null&&x[1]>0);
       if(i.value||am.length||fq)state.mkt.bonds[tk]={venc:i.value||'',amort:am,freq:fq};else delete state.mkt.bonds[tk]});await persistMkt();render();toast('ONs guardadas')}
   else if(a==='backup'){await download('cartera-respaldo.json',JSON.stringify({movs:rawList(),mkt:state.mkt}),'application/json')}
   else if(a==='wipe'){
     if(el.dataset.sure!=='1'){el.dataset.sure='1';el.textContent='Tocá de nuevo para confirmar';el.classList.add('primary');return}
-    await store.wipe([...Object.keys(state.raw),'mkt','meta']);state.raw={};state.mkt={fx:[],spy:[],ipc:[],prices:{},hist:{},fxManual:0,sectors:{},bonds:{}};recompute();render();toast('Datos borrados');
+    await store.wipe([...Object.keys(state.raw),'mkt','meta']);state.raw={};state.mkt={fx:[],spy:[],ipc:[],prices:{},hist:{},fxManual:0,sectors:{},bonds:{},notes:{}};recompute();render();toast('Datos borrados');
   }
 });
-document.addEventListener('change',ev=>{
+document.addEventListener('change',async ev=>{
   const t=ev.target;
   if(t.id==='fileExcel'&&t.files[0]){importExcel(t.files[0]);t.value=''}
   else if(t.dataset.ingest&&t.files[0]){const k=t.dataset.ingest,f=t.files[0];const rd=new FileReader();
     if(/\.xlsx$/i.test(f.name)){rd.onload=()=>{const wb=XLSX.read(rd.result,{type:'array'});ingestText(k,XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]))};rd.readAsArrayBuffer(f)}
     else{rd.onload=()=>{if(!rd.result){toast('El archivo '+f.name+' llegó vacío');return}toast('Leyendo '+f.name+' ('+nfARS.format(rd.result.length)+' caracteres)…');ingestText(k,rd.result)};rd.onerror=()=>toast('No pude leer el archivo.');rd.readAsText(f)}t.value=''}
+  else if(t.dataset.nf){const tk=t.dataset.nf,f=t.dataset.f;state.mkt.notes=state.mkt.notes||{};const n=state.mkt.notes[tk]=state.mkt.notes[tk]||{};
+    n[f]=t.type==='number'?(t.value===''?'':+t.value):t.value;
+    if(!n.why&&!n.target&&!n.stop&&!n.review)delete state.mkt.notes[tk];
+    await persistMkt();
+    const card=t.closest('.ncard'),p=M.list.find(x=>x.tk===tk),st=noteStatus(n,p&&p.px),b=card.querySelector('.nst');
+    b.hidden=!st;b.textContent=st?st.txt:'';b.className='badge nst '+(st?st.cl:'');
+    card.querySelector('.nmeta').textContent=noteMeta(n,p)||'Precio actual: '+(p&&p.px?nfP.format(p.px):'—');toast('Nota guardada')}
   else if(t.id==='selYear'){state.taxYear=+t.value;render()}
   else if(t.id==='fSide'){state.fSide=t.value;render();const e=$('#fSide');e&&e.focus()}
 });
